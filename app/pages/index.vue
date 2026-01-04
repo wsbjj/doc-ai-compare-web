@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-// 引入组件和服务
 import AiAnalysisCard from '~/components/AiAnalysisCard.vue'
 import {
   fetchDocDiffHtml,
   streamAiAnalysis,
+  saveFileToKnowledgeBase, // 🆕 引入新API
   type SegmentAnalysis,
   type ComparisonSummary
 } from '~/services/docCompareApi'
@@ -19,6 +19,10 @@ const diffLoading = ref(false)
 const errorMsg = ref('')
 const summaryData = ref<ComparisonSummary | null>(null)
 const detailList = ref<SegmentAnalysis[]>([])
+
+// 🆕 新增：保存按钮的 Loading 状态
+const savingA = ref(false)
+const savingB = ref(false)
 
 const toastMsg = ref('')
 const showToastVisible = ref(false)
@@ -48,6 +52,30 @@ const handleFileChange = (event: Event, type: 'A' | 'B') => {
   }
 }
 
+// 🆕 新增：处理保存到向量库
+const handleSaveToKb = async (file: File, type: 'A' | 'B') => {
+  if (!file) return
+
+  // 设置对应的 loading 状态
+  if (type === 'A') savingA.value = true
+  else savingB.value = true
+
+  try {
+    const res = await saveFileToKnowledgeBase(file, 'contract_review')
+
+    // ✅ 修复：res 里没有 message，我们直接硬编码成功提示，或者使用 docId
+    // 如果你想显示后端的最外层 message，你需要修改 http.ts 不做彻底解包（不推荐），
+    // 或者简单地在这里写死 "保存成功"
+    showToast(`✅ 保存成功 (ID: ${res.docId})`)
+
+  } catch (e: any) {
+    showToast(`❌ 保存失败: ${e.message}`)
+  } finally {
+    if (type === 'A') savingA.value = false
+    else savingB.value = false
+  }
+}
+
 // --- 核心业务逻辑 ---
 const startProcess = async () => {
   if (!fileA.value || !fileB.value) return
@@ -59,16 +87,16 @@ const startProcess = async () => {
   detailList.value = []
   compareResultHtml.value = ''
 
-  // 1. 任务 A: 请求 Diff HTML (调用封装好的 API)
+  // 1. 任务 A: 请求 Diff HTML
   const diffTask = fetchDocDiffHtml(fileA.value, fileB.value)
-      .then((html) => { compareResultHtml.value = html })
+      .then((data) => { compareResultHtml.value = data.diffHtml })
       .catch((err) => {
         console.error("Diff Error:", err)
         compareResultHtml.value = `<div class="p-4 text-red-500 border border-red-200 rounded">Diff 失败: ${err.message}</div>`
       })
       .finally(() => { diffLoading.value = false })
 
-  // 2. 任务 B: 启动 AI 流式分析 (调用封装好的 API)
+  // 2. 任务 B: 启动 AI 流式分析
   const aiTask = handleAiStream()
 
   await Promise.all([diffTask, aiTask])
@@ -81,7 +109,6 @@ const handleAiStream = async () => {
   let tempBuffer: SegmentAnalysis[] = []
   let flushTimer: any = null
 
-  // 内部函数：将缓冲区数据刷新到视图
   const flushBuffer = () => {
     if (tempBuffer.length > 0) {
       detailList.value.push(...tempBuffer)
@@ -90,23 +117,16 @@ const handleAiStream = async () => {
   }
 
   try {
-    // 调用 Service 层方法，传入回调处理数据
     await streamAiAnalysis(fileA.value, fileB.value, (event) => {
       if (event.type === 'SUMMARY') {
         summaryData.value = event.data as ComparisonSummary
       } else if (event.type === 'DETAIL') {
         tempBuffer.push(event.data as SegmentAnalysis)
-
-        // 节流策略：
-        // 1. 如果是最初几条数据，立即显示，减少首屏等待感
-        // 2. 如果缓冲区积压过多，也立即显示
         if (detailList.value.length < 3 || tempBuffer.length >= 5) {
           if (flushTimer) clearTimeout(flushTimer)
           flushBuffer()
           flushTimer = null
-        }
-        // 3. 常规情况，设置 100ms 延迟刷新，让 UI 渲染更平滑
-        else if (!flushTimer) {
+        } else if (!flushTimer) {
           flushTimer = setTimeout(() => {
             flushBuffer()
             flushTimer = null
@@ -118,7 +138,6 @@ const handleAiStream = async () => {
     })
   } catch (err: any) {
     console.warn("Stream Process Error:", err)
-    // AI 错误不覆盖 Diff 错误，因为 Diff 可能已经成功显示了
     if (!errorMsg.value) errorMsg.value = "AI 分析中断，请检查网络"
   } finally {
     if (flushTimer) clearTimeout(flushTimer)
@@ -134,7 +153,7 @@ const scrollToDiff = (id: number) => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-50 py-10 px-4 relative">
+  <div class="py-10 px-4 relative">
 
     <transition name="fade">
       <div v-if="showToastVisible" class="fixed top-20 left-1/2 transform -translate-x-1/2 z-50 bg-gray-800 text-white px-6 py-3 rounded-full shadow-lg flex items-center gap-2 z-[100]">
@@ -146,9 +165,12 @@ const scrollToDiff = (id: number) => {
       <h1 class="text-3xl font-bold text-gray-800 text-center">📄 智能文档对比系统</h1>
 
       <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+
         <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-all">
-          <h3 class="font-semibold text-lg text-gray-700 mb-4 flex items-center">
-            <span class="w-2 h-6 bg-blue-500 rounded mr-2"></span> 基准文档 (File A)
+          <h3 class="font-semibold text-lg text-gray-700 mb-4 flex items-center justify-between">
+            <div class="flex items-center">
+              <span class="w-2 h-6 bg-blue-500 rounded mr-2"></span> 基准文档 (File A)
+            </div>
           </h3>
           <label class="block w-full cursor-pointer">
             <div class="border-2 border-dashed border-blue-200 rounded-lg p-8 hover:bg-blue-50 transition-colors text-center group">
@@ -156,12 +178,30 @@ const scrollToDiff = (id: number) => {
               <input type="file" class="hidden" @change="e => handleFileChange(e, 'A')" accept=".doc,.docx"/>
             </div>
           </label>
-          <p v-if="fileA" class="mt-3 text-sm text-green-600 font-medium text-center bg-green-50 py-1 rounded">✅ 已选: {{ fileA.name }}</p>
+
+          <div v-if="fileA" class="mt-4 bg-green-50 p-3 rounded-lg border border-green-100 flex items-center justify-between">
+            <div class="flex items-center gap-2 overflow-hidden">
+              <span class="text-lg">📄</span>
+              <span class="text-sm text-green-700 font-medium truncate" :title="fileA.name">{{ fileA.name }}</span>
+            </div>
+
+            <button
+                @click.stop="handleSaveToKb(fileA, 'A')"
+                :disabled="savingA"
+                class="flex-shrink-0 flex items-center gap-1 bg-white border border-green-200 text-green-600 text-xs px-3 py-1.5 rounded hover:bg-green-100 hover:text-green-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <svg v-if="savingA" class="animate-spin h-3 w-3" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z"></path></svg>
+              <svg v-else class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"></path></svg>
+              {{ savingA ? '保存中...' : '入库' }}
+            </button>
+          </div>
         </div>
 
         <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-all">
-          <h3 class="font-semibold text-lg text-gray-700 mb-4 flex items-center">
-            <span class="w-2 h-6 bg-orange-500 rounded mr-2"></span> 对比文档 (File B)
+          <h3 class="font-semibold text-lg text-gray-700 mb-4 flex items-center justify-between">
+            <div class="flex items-center">
+              <span class="w-2 h-6 bg-orange-500 rounded mr-2"></span> 对比文档 (File B)
+            </div>
           </h3>
           <label class="block w-full cursor-pointer">
             <div class="border-2 border-dashed border-orange-200 rounded-lg p-8 hover:bg-orange-50 transition-colors text-center group">
@@ -169,7 +209,23 @@ const scrollToDiff = (id: number) => {
               <input type="file" class="hidden" @change="e => handleFileChange(e, 'B')" accept=".doc,.docx"/>
             </div>
           </label>
-          <p v-if="fileB" class="mt-3 text-sm text-green-600 font-medium text-center bg-green-50 py-1 rounded">✅ 已选: {{ fileB.name }}</p>
+
+          <div v-if="fileB" class="mt-4 bg-green-50 p-3 rounded-lg border border-green-100 flex items-center justify-between">
+            <div class="flex items-center gap-2 overflow-hidden">
+              <span class="text-lg">📄</span>
+              <span class="text-sm text-green-700 font-medium truncate" :title="fileB.name">{{ fileB.name }}</span>
+            </div>
+
+            <button
+                @click.stop="handleSaveToKb(fileB, 'B')"
+                :disabled="savingB"
+                class="flex-shrink-0 flex items-center gap-1 bg-white border border-green-200 text-green-600 text-xs px-3 py-1.5 rounded hover:bg-green-100 hover:text-green-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <svg v-if="savingB" class="animate-spin h-3 w-3" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z"></path></svg>
+              <svg v-else class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"></path></svg>
+              {{ savingB ? '保存中...' : '入库' }}
+            </button>
+          </div>
         </div>
       </div>
 
