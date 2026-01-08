@@ -47,6 +47,31 @@ export interface DocumentSearchVO {
     matchSnippet: string;
 }
 
+export interface DashboardStats {
+    today_count: number
+    count_change_percent: string
+    avg_sim: number
+    avg_sim_percent: number
+    sim_change_percent: string
+    high_risk_count: number
+    total_docs: number
+    weekly_new_docs: number
+    avg_time: number
+    avg_time_sec: string
+    total_saved_hours: number
+}
+
+export interface RecentActivity {
+    id: number
+    baseDocId: string
+    compareDocId: string
+    baseFileName: string
+    compareFileName: string
+    similarity: number
+    riskLevel: string
+    createTime: string
+}
+
 // --- 接口实现 ---
 
 /**
@@ -193,4 +218,25 @@ export const compareWithKnowledgeBase = async (
             source: 'upload_compare'
         }
     }))
+}
+
+/**
+ * 7. 获取仪表盘统计数据
+ */
+export const getDashboardStats = async (): Promise<DashboardStats> => {
+    return await http<DashboardStats>('/api/dashboard/stats', {
+        method: 'GET'
+    })
+}
+
+/**
+ * 8. 获取最近的对比记录
+ */
+export const getDashboardRecent = async (limit: number = 6): Promise<RecentActivity[]> => {
+    return await http<RecentActivity[]>('/api/dashboard/recent', {
+        method: 'GET',
+        params: {
+            limit: limit.toString()
+        }
+    })
 }

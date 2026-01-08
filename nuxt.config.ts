@@ -9,7 +9,7 @@ export default defineNuxtConfig({
     nitro: {
         devProxy: {
             '/api': {
-                target: 'http://localhost:8080/api', // 这里填你 Java 后端的地址
+                target: 'http://localhost:8082/api', // 这里填你 Java 后端的地址
                 changeOrigin: true,
             }
         }

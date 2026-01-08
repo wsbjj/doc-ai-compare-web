@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 // 1. 禁用布局
+// @ts-ignore
 definePageMeta({
   layout: false
 })

@@ -16,7 +16,7 @@ interface ApiResponse<T> {
  */
 export const http = async <T>(url: string, options?: FetchOptions) => {
     return await $fetch<T>(url, {
-        ...options,
+        ...options as any,
 
         // 请求拦截器
         onRequest({ options }) {

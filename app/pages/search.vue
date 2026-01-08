@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {ref} from 'vue'
-import {searchKnowledgeBase, getFilePreviewUrl, compareWithKnowledgeBase, type SearchResultItem} from '~/services/docCompareApi'
+import {searchKnowledgeBase, getFilePreviewUrl, compareWithKnowledgeBase, type SearchResultItem} from '../services/docCompareApi'
 
 // --- 状态 ---
 const query = ref('')
@@ -46,6 +46,8 @@ const handleFileUpload = async (event: Event) => {
   if (!target.files?.length) return
 
   const file = target.files[0]
+  if (!file) return
+
   loading.value = true
   hasSearched.value = true
   results.value = []

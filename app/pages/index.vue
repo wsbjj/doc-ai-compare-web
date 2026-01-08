@@ -1,13 +1,18 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import AiAnalysisCard from '~/components/AiAnalysisCard.vue'
+import { useRouter } from 'vue-router'
+// @ts-ignore Vetur: Vue SFC default export typing
+import AiAnalysisCard from '../components/AiAnalysisCard.vue'
 import {
   fetchDocDiffHtml,
   streamAiAnalysis,
   saveFileToKnowledgeBase, // 🆕 引入新API
   type SegmentAnalysis,
   type ComparisonSummary
-} from '~/services/docCompareApi'
+} from '../services/docCompareApi'
+
+// --- 路由 ---
+const router = useRouter()
 
 // --- 状态变量 ---
 const fileA = ref<File | null>(null)
@@ -80,6 +85,9 @@ const handleSaveToKb = async (file: File, type: 'A' | 'B') => {
 const startProcess = async () => {
   if (!fileA.value || !fileB.value) return
 
+  const fileAFile = fileA.value as File
+  const fileBFile = fileB.value as File
+
   loading.value = true
   diffLoading.value = true
   errorMsg.value = ''
@@ -88,13 +96,17 @@ const startProcess = async () => {
   compareResultHtml.value = ''
 
   // 1. 任务 A: 请求 Diff HTML
-  const diffTask = fetchDocDiffHtml(fileA.value, fileB.value)
-      .then((data) => { compareResultHtml.value = data.diffHtml })
-      .catch((err) => {
+  const diffTask = (async () => {
+      try {
+        const data: any = await fetchDocDiffHtml(fileAFile, fileBFile)
+        compareResultHtml.value = data.diffHtml
+      } catch (err: any) {
         console.error("Diff Error:", err)
         compareResultHtml.value = `<div class="p-4 text-red-500 border border-red-200 rounded">Diff 失败: ${err.message}</div>`
-      })
-      .finally(() => { diffLoading.value = false })
+      } finally {
+        diffLoading.value = false
+      }
+    })()
 
   // 2. 任务 B: 启动 AI 流式分析
   const aiTask = handleAiStream()
@@ -149,6 +161,32 @@ const handleAiStream = async () => {
 // --- 交互功能 ---
 const scrollToDiff = (id: number) => {
   showToast(`AI 提示片段 #${id}：请在上方 Diff 视图中查找对应差异。`)
+}
+
+// 导出报告
+const exportReport = () => {
+  if (!summaryData.value || !fileA.value || !fileB.value) return
+
+  // 检查是否还在加载中
+  if (loading.value) {
+    showToast('⏳ 报告生成中，请等待完毕后再导出')
+    return
+  }
+
+  const reportData = {
+    fileA: fileA.value.name,
+    fileB: fileB.value.name,
+    diffHtml: compareResultHtml.value,
+    summaryData: summaryData.value,
+    detailList: detailList.value,
+    timestamp: new Date().toLocaleString('zh-CN')
+  }
+
+  // 将报告数据存储到sessionStorage
+  sessionStorage.setItem('reportData', JSON.stringify(reportData))
+  
+  // 打开新窗口显示报告
+  router.push('/report')
 }
 </script>
 
@@ -282,6 +320,16 @@ const scrollToDiff = (id: number) => {
                   <span class="text-xs text-gray-400 block mb-1">相似片段数</span>
                   <span class="text-xl font-bold text-orange-500">{{ summaryData.totalSimilarSegments }}</span>
                 </div>
+                <div class="w-px bg-gray-200"></div>
+                <button
+                  @click="exportReport"
+                  class="flex-shrink-0 flex items-center gap-2 bg-indigo-50 border border-indigo-200 text-indigo-600 text-xs px-4 py-2 rounded hover:bg-indigo-100 transition-colors"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2m0 0v-8m0 8l-6-4m6 4l6-4"></path>
+                  </svg>
+                  导出报告
+                </button>
               </div>
             </transition>
           </div>

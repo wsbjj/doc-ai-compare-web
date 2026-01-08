@@ -1,74 +1,134 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
+import { 
+  getDashboardStats, 
+  getDashboardRecent, 
+  type DashboardStats, 
+  type RecentActivity 
+} from '~/services/docCompareApi'
 
-// --- 1. 核心业务指标 (模拟数据) ---
-const coreMetrics = ref([
-  {
-    label: '今日对比次数',
-    value: 42,
-    unit: '次',
-    icon: '⚡',
-    color: 'text-blue-600',
-    bg: 'bg-blue-50',
-    trend: '+12% 较昨日'
-  },
-  {
-    label: '平均相似度',
-    value: 38.5,
-    unit: '%',
-    icon: '📊',
-    color: 'text-indigo-600',
-    bg: 'bg-indigo-50',
-    trend: '-2.1% 较昨日'
-  },
-  {
-    label: '高风险预警',
-    value: 3,
-    unit: '个',
-    icon: '🚨',
-    color: 'text-red-600',
-    bg: 'bg-red-50',
-    trend: '需关注'
-  },
-  {
-    label: '知识库文档',
-    value: 1284,
-    unit: '份',
-    icon: '📚',
-    color: 'text-green-600',
-    bg: 'bg-green-50',
-    trend: '+15 本周新增'
+// --- 1. 核心业务指标 ---
+const coreMetrics = ref<any[]>([])
+
+// --- 2. 效率与性能 ---
+const performanceMetrics = ref<any[]>([])
+
+// --- 3. 最近动态 ---
+const recentActivities = ref<RecentActivity[]>([])
+
+// --- 4. 加载状态 ---
+const isLoading = ref(false)
+const error = ref('')
+
+// 获取仪表盘统计数据
+const fetchDashboardStats = async () => {
+  try {
+    isLoading.value = true
+    const stats = await getDashboardStats()
+    
+    // 构建核心指标
+    coreMetrics.value = [
+      {
+        label: '今日对比次数',
+        value: stats.today_count,
+        unit: '次',
+        icon: '⚡',
+        color: 'text-blue-600',
+        bg: 'bg-blue-50',
+        // trend: `${stats.count_change_percent} 较昨日`
+      },
+      {
+        label: '平均相似度',
+        value: stats.avg_sim_percent,
+        unit: '%',
+        icon: '📊',
+        color: 'text-indigo-600',
+        bg: 'bg-indigo-50',
+        // trend: `${stats.sim_change_percent} 较昨日`
+      },
+      {
+        label: '高风险预警',
+        value: stats.high_risk_count,
+        unit: '个',
+        icon: '🚨',
+        color: 'text-red-600',
+        bg: 'bg-red-50',
+        // trend: '需关注'
+      },
+      {
+        label: '知识库文档',
+        value: stats.total_docs,
+        unit: '份',
+        icon: '📚',
+        color: 'text-green-600',
+        bg: 'bg-green-50',
+        trend: `+${stats.weekly_new_docs} 本周新增`
+      }
+    ]
+    
+    // 构建性能指标
+    performanceMetrics.value = [
+      {
+        label: 'AI 响应平均耗时',
+        value: stats.avg_time_sec,
+        unit: 's/篇',
+        desc: '基于高性能 GPU 集群加速',
+        progress: Math.min(Math.round((2000 - stats.avg_time) / 2000 * 100), 100),
+        color: 'bg-emerald-500'
+      },
+      {
+        label: '累计节省人工工时',
+        value: Math.round(stats.total_saved_hours),
+        unit: '小时',
+        desc: '按人工阅读速度 500字/分钟 估算',
+        progress: Math.min(Math.round(stats.total_saved_hours / 200 * 100), 100),
+        color: 'bg-orange-500'
+      }
+    ]
+  } catch (e) {
+    error.value = '获取仪表盘数据失败'
+    console.error(e)
   }
-])
+}
 
-// --- 2. 效率与性能 (模拟数据) ---
-const performanceMetrics = ref([
-  {
-    label: 'AI 响应平均耗时',
-    value: '1.5',
-    unit: 's/篇',
-    desc: '基于高性能 GPU 集群加速',
-    progress: 85, // 进度条长度
-    color: 'bg-emerald-500'
-  },
-  {
-    label: '累计节省人工工时',
-    value: '128',
-    unit: '小时',
-    desc: '按人工阅读速度 500字/分钟 估算',
-    progress: 60,
-    color: 'bg-orange-500'
+// 获取最近的对比记录
+const fetchRecentActivities = async () => {
+  try {
+    const data = await getDashboardRecent(6)
+    recentActivities.value = data
+  } catch (e) {
+    error.value = '获取最近动态失败'
+    console.error(e)
   }
-])
+}
 
-// --- 3. 最近动态 (模拟数据) ---
-const recentActivities = ref([
-  { id: 101, fileA: '2024项目申报书_v1.doc', fileB: '2024项目申报书_v2.doc', time: '10分钟前', risk: 'LOW', similarity: '98.2%' },
-  { id: 102, fileA: '合同模板_标准版.docx', fileB: '供应商合同_修改版.docx', time: '35分钟前', risk: 'HIGH', similarity: '76.5%' },
-  { id: 103, fileA: '技术规格书A.doc', fileB: '技术规格书B.doc', time: '1小时前', risk: 'MEDIUM', similarity: '88.1%' },
-  { id: 104, fileA: '员工手册2023.pdf', fileB: '员工手册2024.pdf', time: '2小时前', risk: 'LOW', similarity: '92.4%' },
-  { id: 105, fileA: '产品介绍.pptx', fileB: '产品介绍_新.pptx', time: '3小时前', risk: 'LOW', similarity: '15.3%' },
-])
+// 初始化数据
+onMounted(async () => {
+  await Promise.all([
+    fetchDashboardStats(),
+    fetchRecentActivities()
+  ])
+  isLoading.value = false
+})
+
+// 格式化时间
+const formatTime = (dateString: string): string => {
+  const date = new Date(dateString)
+  const now = new Date()
+  const diffMs = now.getTime() - date.getTime()
+  const diffMins = Math.round(diffMs / 60000)
+  
+  if (diffMins < 1) return '刚刚'
+  if (diffMins < 60) return `${diffMins}分钟前`
+  
+  const diffHours = Math.round(diffMins / 60)
+  if (diffHours < 24) return `${diffHours}小时前`
+  
+  const diffDays = Math.round(diffHours / 24)
+  if (diffDays < 7) return `${diffDays}天前`
+  
+  return date.toLocaleDateString('zh-CN')
+}
 
 const getRiskBadge = (risk: string) => {
   if (risk === 'HIGH') return 'bg-red-100 text-red-700 border-red-200'
@@ -80,13 +140,23 @@ const getRiskBadge = (risk: string) => {
 <template>
   <div class="p-8 max-w-7xl mx-auto space-y-8">
 
+    <div v-if="error" class="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
+      {{ error }}
+    </div>
+
     <div class="mb-2">
-      <h2 class="text-2xl font-bold text-gray-800">👋 欢迎回来，管理员，DEMO！DEMO！</h2>
+      <h2 class="text-2xl font-bold text-gray-800">👋 欢迎回来，管理员</h2>
       <p class="text-gray-500 text-sm mt-1">这里是系统的实时运行状态概览。</p>
     </div>
 
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-      <div v-for="item in coreMetrics" :key="item.label"
+      <div v-if="isLoading" class="col-span-full">
+        <div class="flex justify-center items-center h-32">
+          <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+          <span class="ml-2 text-gray-500">加载中...</span>
+        </div>
+      </div>
+      <div v-else v-for="item in coreMetrics" :key="item.label"
            class="bg-white p-6 rounded-xl border border-gray-100 shadow-sm hover:shadow-md transition-all">
         <div class="flex justify-between items-start mb-4">
           <div :class="`w-12 h-12 rounded-lg flex items-center justify-center text-2xl ${item.bg}`">
@@ -110,7 +180,10 @@ const getRiskBadge = (risk: string) => {
         <h3 class="font-bold text-gray-800 mb-6 flex items-center gap-2">
           <span>🚀</span> 系统效能
         </h3>
-        <div class="space-y-8">
+        <div v-if="isLoading" class="flex justify-center items-center h-32">
+          <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600"></div>
+        </div>
+        <div v-else class="space-y-8">
           <div v-for="stat in performanceMetrics" :key="stat.label">
             <div class="flex justify-between items-end mb-2">
               <span class="text-sm text-gray-500">{{ stat.label }}</span>
@@ -129,11 +202,18 @@ const getRiskBadge = (risk: string) => {
           <h3 class="font-bold text-gray-800 flex items-center gap-2">
             <span>🕘</span> 最近对比动态
           </h3>
-          <button class="text-xs text-indigo-600 hover:underline">查看全部</button>
+          <!-- <button class="text-xs text-indigo-600 hover:underline">查看全部</button> -->
         </div>
 
         <div class="overflow-x-auto">
-          <table class="w-full text-sm text-left">
+          <div v-if="isLoading" class="flex justify-center items-center p-8">
+            <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600"></div>
+            <span class="ml-2 text-gray-500">加载中...</span>
+          </div>
+          <div v-else-if="recentActivities.length === 0" class="px-6 py-8 text-center text-gray-500">
+            暂无对比记录
+          </div>
+          <table v-else class="w-full text-sm text-left">
             <thead class="text-xs text-gray-500 uppercase bg-gray-50">
             <tr>
               <th class="px-6 py-3">基准文档 (A)</th>
@@ -145,22 +225,22 @@ const getRiskBadge = (risk: string) => {
             </thead>
             <tbody>
             <tr v-for="activity in recentActivities" :key="activity.id" class="border-b border-gray-50 hover:bg-gray-50 transition-colors">
-              <td class="px-6 py-4 font-medium text-gray-900 truncate max-w-[150px]" :title="activity.fileA">
-                {{ activity.fileA }}
+              <td class="px-6 py-4 font-medium text-gray-900 truncate max-w-[150px]" :title="activity.baseFileName">
+                {{ activity.baseFileName }}
               </td>
-              <td class="px-6 py-4 text-gray-500 truncate max-w-[150px]" :title="activity.fileB">
-                {{ activity.fileB }}
+              <td class="px-6 py-4 text-gray-500 truncate max-w-[150px]" :title="activity.compareFileName">
+                {{ activity.compareFileName }}
               </td>
               <td class="px-6 py-4 font-mono font-bold text-gray-700">
-                {{ activity.similarity }}
+                {{ (activity.similarity * 100).toFixed(1) }}%
               </td>
               <td class="px-6 py-4">
-                  <span :class="`px-2 py-1 rounded text-xs border ${getRiskBadge(activity.risk)}`">
-                    {{ activity.risk }}
+                  <span :class="`px-2 py-1 rounded text-xs border ${getRiskBadge(activity.riskLevel)}`">
+                    {{ activity.riskLevel }}
                   </span>
               </td>
               <td class="px-6 py-4 text-right text-gray-400 text-xs">
-                {{ activity.time }}
+                {{ formatTime(activity.createTime) }}
               </td>
             </tr>
             </tbody>

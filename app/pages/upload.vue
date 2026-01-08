@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { saveFileToKnowledgeBase } from '~/services/docCompareApi'
+import { saveFileToKnowledgeBase } from '../services/docCompareApi'
 
 // 定义上传文件状态接口
 interface UploadFileItem {
@@ -49,7 +49,8 @@ const handleFileSelect = (e: Event) => {
 // --- 核心逻辑 ---
 const addFilesToQueue = (fileList: FileList) => {
   for (let i = 0; i < fileList.length; i++) {
-    const file = fileList[i]
+    const file = fileList.item(i)
+    if (!file) continue
     // 过滤非文档类型 (可选)
     // if (!file.name.match(/\.(doc|docx|pdf|txt)$/)) continue;
 
