@@ -5,7 +5,9 @@ import { useRouter } from 'vue-router'
 // 1. 禁用布局
 // @ts-ignore
 definePageMeta({
-  layout: false
+  layout: false,
+  // 登录页为公共路由，不走登录校验
+  public: true
 })
 
 const router = useRouter()

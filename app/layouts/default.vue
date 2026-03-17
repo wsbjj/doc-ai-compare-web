@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import {useRoute} from 'vue-router'
-
+// 直接使用 Nuxt 提供的 useRoute，避免显式导入 vue-router 类型带来的 ts 报错
 const route = useRoute()
 
 // 定义菜单项
@@ -35,6 +34,33 @@ const menuItems = [
 
 // 判断链接是否激活
 const isActive = (path: string) => route.path === path
+
+// 退出登录：调用后端 /auth/logout，让后端返回 CAS 注销地址
+const logout = async () => {
+  try {
+    const res = await $fetch<{
+      code: number
+      data?: {
+        casLogoutUrl?: string
+      }
+      message?: string
+    }>('/auth/logout', {
+      method: 'POST',
+      baseURL: 'http://192.168.4.196:8088',
+      credentials: 'include'
+    })
+
+    const url = res?.data?.casLogoutUrl
+    if (url) {
+      window.location.href = url
+    } else {
+      window.location.reload()
+    }
+  } catch (_e) {
+    // 出现异常时直接刷新本页，由后端 /auth/me + 中间件重新判断登录状态
+    window.location.reload()
+  }
+}
 </script>
 
 <template>
@@ -80,10 +106,17 @@ const isActive = (path: string) => route.path === path
     <main class="flex-1 flex flex-col h-full overflow-hidden relative">
       <header class="h-16 bg-white border-b border-gray-200 flex items-center px-8 justify-between shadow-sm z-10">
         <h2 class="text-lg font-semibold text-gray-800">
-          {{ menuItems.find(i => i.path === route.path)?.name }}
+          {{ menuItems.find((i: { path: string; name: string }) => i.path === route.path)?.name }}
         </h2>
-        <div class="flex gap-4">
+        <div class="flex gap-4 items-center">
           <button class="text-gray-400 hover:text-indigo-600 transition-colors">🔔</button>
+          <button
+            type="button"
+            class="px-3 py-1.5 text-sm rounded-md border border-gray-200 text-gray-700 hover:bg-gray-100 hover:text-gray-900 transition-colors"
+            @click="logout"
+          >
+            退出
+          </button>
         </div>
       </header>
       <div class="flex-1 overflow-y-auto p-0 bg-gray-50 scroll-smooth">
