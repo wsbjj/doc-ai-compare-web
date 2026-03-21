@@ -4,40 +4,66 @@ export default defineNuxtRouteMiddleware(async (to, _from) => {
     return
   }
 
+  const config = useRuntimeConfig()
+  const requestHeaders = useRequestHeaders(['cookie'])
+
+  // 同时兼容：
+  // - SSR：使用后端绝对地址，避免 SSR 期间相对 /api/* 被误解析
+  // - Client：使用本域名 /api 代理地址，避免浏览器跨域 CORS
+  const meUrl = process.server
+    ? `${config.public.backendBaseUrl}/api/auth/me`
+    : '/api/auth/me'
+
   try {
-    // 根据后端文档，Result 结构为 { code, data, message }
     const res = await $fetch<{
       code: number
       data?: {
         loggedIn?: boolean
-        user?: { id: string }
         casLoginUrl?: string
+        user?: {
+          id: string
+          typeCode?: string
+          typeId?: string
+          typeName?: string
+          name?: string
+          studentNo?: string
+          avatar?: string | null
+        }
+        userPreview?: {
+          typeCode?: string
+          typeId?: string
+          typeName?: string
+        }
       }
       message?: string
-    }>('/auth/me', {
-      baseURL: 'http://192.168.4.196:8088',
-      credentials: 'include'
+    }>(meUrl, {
+      credentials: 'include',
+      // SSR 场景下把浏览器 cookie 转发给后端，保证能拿到登录态
+      headers: process.server && requestHeaders.cookie ? { cookie: requestHeaders.cookie } : undefined
     })
 
     const data = res?.data
 
     if (data?.loggedIn) {
-      // 已登录，直接放行；如有需要可在此把 user 存入全局状态
+      // 老师：正常登录态，按你的要求打印 type_name / type_id
+      console.log('login user:', {
+        typeCode: data.user?.typeCode,
+        typeId: data.user?.typeId,
+        typeName: data.user?.typeName,
+        name: data.user?.name,
+        studentNo: data.user?.studentNo,
+        avatar: data.user?.avatar
+      })
       return
     }
 
-    // 未登录但返回了 CAS 登录地址，跳转到统一认证中心
-    if (data?.casLoginUrl) {
-      if (process.client) {
-        window.location.href = data.casLoginUrl
-      }
-      return
-    }
+    // 未登录：不要自动跳转 CAS
+    // 只提示并引导用户到前端登录页，由用户手动点击“统一认证登录”后再跳转 CAS
   } catch (_e) {
-    // 调用失败时走兜底逻辑
+    // 调用失败也按未登录处理
   }
 
-  // 兜底：既没登录也没有 casLoginUrl 或出现异常
-  return navigateTo('/error')
+  // 未登录：跳到登录页并提示“请登录”
+  return navigateTo({ path: '/login', query: { needLogin: '1' } }, { replace: true })
 })
 

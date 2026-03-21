@@ -212,8 +212,8 @@ const exportReport = () => {
           </h3>
           <label class="block w-full cursor-pointer">
             <div class="border-2 border-dashed border-blue-200 rounded-lg p-8 hover:bg-blue-50 transition-colors text-center group">
-              <span class="text-blue-500 font-medium group-hover:text-blue-600">点击上传 .doc/.docx</span>
-              <input type="file" class="hidden" @change="e => handleFileChange(e, 'A')" accept=".doc,.docx"/>
+              <span class="text-blue-500 font-medium group-hover:text-blue-600">点击上传 .doc/.docx/.pdf/.txt</span>
+              <input type="file" class="hidden" @change="e => handleFileChange(e, 'A')" accept=".doc,.docx,.pdf,.txt"/>
             </div>
           </label>
 
@@ -243,8 +243,8 @@ const exportReport = () => {
           </h3>
           <label class="block w-full cursor-pointer">
             <div class="border-2 border-dashed border-orange-200 rounded-lg p-8 hover:bg-orange-50 transition-colors text-center group">
-              <span class="text-orange-500 font-medium group-hover:text-orange-600">点击上传 .doc/.docx</span>
-              <input type="file" class="hidden" @change="e => handleFileChange(e, 'B')" accept=".doc,.docx"/>
+              <span class="text-orange-500 font-medium group-hover:text-orange-600">点击上传 .doc/.docx/.pdf/.txt</span>
+              <input type="file" class="hidden" @change="e => handleFileChange(e, 'B')" accept=".doc,.docx,.pdf,.txt"/>
             </div>
           </label>
 

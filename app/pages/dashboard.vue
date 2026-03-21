@@ -1,5 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+
+// 仪表盘数据量较大，关闭 SSR，避免服务端渲染时内存占用过高
+definePageMeta({
+  ssr: false
+})
 import { 
   getDashboardStats, 
   getDashboardRecent, 

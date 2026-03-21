@@ -2,6 +2,11 @@
 import { ref } from 'vue'
 import { saveFileToKnowledgeBase } from '../services/docCompareApi'
 
+// 上传页体量较大，强制仅客户端渲染，避免 Nitro SSR Worker 内存溢出
+definePageMeta({
+  ssr: false
+})
+
 // 定义上传文件状态接口
 interface UploadFileItem {
   file: File
@@ -151,7 +156,7 @@ const getStatusColor = (status: string) => {
             ☁️
           </div>
           <h3 class="text-lg font-medium text-gray-700">点击或拖拽文件到此处</h3>
-          <p class="text-gray-400 text-sm mt-2">支持 .docx, .doc, .pdf 等格式 (支持批量)</p>
+          <p class="text-gray-400 text-sm mt-2">支持 .doc/.docx/.pdf/.txt 等格式（支持批量上传）</p>
         </div>
       </div>
     </div>
