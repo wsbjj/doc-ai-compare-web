@@ -70,9 +70,13 @@ export interface RecentActivity {
     similarity: number
     riskLevel: string
     createTime: string
+    /** MinIO object key；有值表示服务端已生成 PDF 报告 */
+    reportPdfObject?: string | null
 }
 
-/** 单条对比记录详情（与后端 DocCompareLog / DocCompareLogVO 字段对齐，用于下载等） */
+/**
+ * 单条对比记录详情（与表 `doc_compare_log` / DocCompareLogVO 字段一致，用于下载等）
+ */
 export interface CompareLogDetail {
     id: number
     baseDocId: string
@@ -86,6 +90,10 @@ export interface CompareLogDetail {
     processTimeMs?: number | null
     tokenUsage?: number | null
     savedManHours?: number | null
+    /** 操作人学号/工号 */
+    createBy?: string | null
+    /** MinIO 报告对象键；无则仅可导出 HTML 留档 */
+    reportPdfObject?: string | null
 }
 
 // --- 接口实现 ---
@@ -263,4 +271,12 @@ export const getCompareLogDetail = async (id: number): Promise<CompareLogDetail>
     return await http<CompareLogDetail>(`/api/dashboard/compare-log/${id}`, {
         method: 'GET'
     })
+}
+
+/** 获取对比报告 PDF 的预签名下载 URL（需记录已生成 PDF） */
+export const getCompareReportPdfUrl = async (id: number): Promise<string> => {
+    const data = await http<{ downloadUrl: string }>(`/api/dashboard/compare-log/${id}/report-pdf`, {
+        method: 'GET'
+    })
+    return data.downloadUrl
 }
