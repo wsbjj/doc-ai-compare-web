@@ -30,7 +30,14 @@ export interface PaperAgentStatus {
 export interface ImprovementItem {
   severity: string   // "HIGH" | "MEDIUM" | "LOW"
   dimension: string  // "PLAGIARISM" | "LOGIC" | "COMPLIANCE"
-  description: string
+  /** 具体问题（哪里不对） */
+  problem?: string
+  /** 修改建议（怎么改） */
+  suggestion?: string
+  /** 补充说明：依据、示例、注意点等 */
+  detail?: string
+  /** 兼容旧版单段描述 */
+  description?: string
 }
 
 /** 分章节/分段问题 */

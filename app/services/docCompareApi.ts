@@ -72,6 +72,22 @@ export interface RecentActivity {
     createTime: string
 }
 
+/** 单条对比记录详情（与后端 DocCompareLog / DocCompareLogVO 字段对齐，用于下载等） */
+export interface CompareLogDetail {
+    id: number
+    baseDocId: string
+    compareDocId: string
+    baseFileName: string
+    compareFileName: string
+    similarity: number
+    riskLevel: string
+    createTime: string
+    resultSummary?: string | null
+    processTimeMs?: number | null
+    tokenUsage?: number | null
+    savedManHours?: number | null
+}
+
 // --- 接口实现 ---
 
 /**
@@ -105,6 +121,7 @@ export const streamAiAnalysis = async (
 
     const response = await fetch('/api/doc-compare/stream', {
         method: 'POST',
+        credentials: 'include',
         body: formData
     })
 
@@ -238,5 +255,12 @@ export const getDashboardRecent = async (limit: number = 6): Promise<RecentActiv
         params: {
             limit: limit.toString()
         }
+    })
+}
+
+/** 获取当前用户名下某条对比记录详情（用于下载记录） */
+export const getCompareLogDetail = async (id: number): Promise<CompareLogDetail> => {
+    return await http<CompareLogDetail>(`/api/dashboard/compare-log/${id}`, {
+        method: 'GET'
     })
 }

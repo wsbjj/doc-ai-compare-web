@@ -1,5 +1,4 @@
 <script setup lang="ts">
-// 直接使用 Nuxt 提供的 useRoute，避免显式导入 vue-router 类型带来的 ts 报错
 const route = useRoute()
 
 const userId = ref<string | null>(null)
@@ -7,49 +6,11 @@ const userName = ref<string | null>(null)
 const userStudentNo = ref<string | null>(null)
 const userAvatar = ref<string | null>(null)
 
-const normalizeAvatarSrc = (avatar?: string | null): string | null => {
-  if (!avatar) return null
-  // base64 可能已经带 data: 前缀
-  if (avatar.startsWith('data:image/')) return avatar
-  // URL 直接可用
-  if (avatar.startsWith('http://') || avatar.startsWith('https://')) return avatar
+const recordsMenuOpen = ref(true)
 
-  // 否则按“纯 base64”处理，尽量根据前缀猜图片类型
-  const base64 = avatar
-  if (base64.startsWith('iVBOR')) return `data:image/png;base64,${base64}`
-  if (base64.startsWith('/9j/') || base64.startsWith('\/9j\/')) return `data:image/jpeg;base64,${base64}`
-  if (base64.startsWith('R0lGOD')) return `data:image/gif;base64,${base64}`
-  // 默认按 jpeg
-  return `data:image/jpeg;base64,${base64}`
-}
+type TopLink = { name: string; path: string; icon: string }
 
-onMounted(async () => {
-  try {
-    const res = await $fetch<{
-      code: number
-      data?: {
-        loggedIn?: boolean
-        user?: { id: string; name?: string; realName?: string; studentNo?: string }
-      }
-      message?: string
-    }>('/api/auth/me', {
-      credentials: 'include'
-    })
-
-    if (res.data?.loggedIn && res.data.user?.id) {
-      userId.value = res.data.user.id
-      userName.value = res.data.user.name || res.data.user.realName || null
-      userStudentNo.value = res.data.user.studentNo || null
-      userAvatar.value = res.data.user.avatar || null
-    }
-  } catch {
-    // 忽略头像区域的错误
-  }
-})
-
-// 定义菜单项
-const menuItems = [
-  // 🆕 新增：数据面板 (作为第一个选项)
+const menuTopLinks: TopLink[] = [
   {
     name: '数据面板',
     path: '/dashboard',
@@ -77,10 +38,65 @@ const menuItems = [
   }
 ]
 
-// 判断链接是否激活
-const isActive = (path: string) => route.path === path
+const recordGroupIcon =
+  '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />'
 
-// 退出登录：调用后端 /api/auth/logout，让后端返回 CAS 注销地址
+const recordSubLinks = [
+  { name: '文档对比记录', path: '/records/doc-compare' },
+  { name: '文档审查记录', path: '/records/paper-review' }
+]
+
+const flatNavForTitle = computed(() => {
+  const top = menuTopLinks.map(i => ({ name: i.name, path: i.path }))
+  const sub = recordSubLinks.map(i => ({ name: i.name, path: i.path }))
+  return [...top, ...sub]
+})
+
+const currentPageTitle = computed(
+  () => flatNavForTitle.value.find(i => i.path === route.path)?.name ?? '项目材料独创性智能审查系统'
+)
+
+const isNavActive = (path: string) => route.path === path
+
+const isRecordSectionActive = computed(() =>
+  recordSubLinks.some(s => route.path === s.path)
+)
+
+const normalizeAvatarSrc = (avatar?: string | null): string | null => {
+  if (!avatar) return null
+  if (avatar.startsWith('data:image/')) return avatar
+  if (avatar.startsWith('http://') || avatar.startsWith('https://')) return avatar
+  const base64 = avatar
+  if (base64.startsWith('iVBOR')) return `data:image/png;base64,${base64}`
+  if (base64.startsWith('/9j/') || base64.startsWith('\/9j\/')) return `data:image/jpeg;base64,${base64}`
+  if (base64.startsWith('R0lGOD')) return `data:image/gif;base64,${base64}`
+  return `data:image/jpeg;base64,${base64}`
+}
+
+onMounted(async () => {
+  try {
+    const res = await $fetch<{
+      code: number
+      data?: {
+        loggedIn?: boolean
+        user?: { id: string; name?: string; realName?: string; studentNo?: string }
+      }
+      message?: string
+    }>('/api/auth/me', {
+      credentials: 'include'
+    })
+
+    if (res.data?.loggedIn && res.data.user?.id) {
+      userId.value = res.data.user.id
+      userName.value = res.data.user.name || res.data.user.realName || null
+      userStudentNo.value = res.data.user.studentNo || null
+      userAvatar.value = res.data.user.avatar || null
+    }
+  } catch {
+    // 忽略头像区域的错误
+  }
+})
+
 const logout = async () => {
   try {
     const res = await $fetch<{
@@ -91,7 +107,6 @@ const logout = async () => {
       message?: string
     }>('/api/auth/logout', {
       method: 'POST',
-      // 不写 baseURL，走 Nuxt 的 /api 代理
       credentials: 'include'
     })
 
@@ -102,7 +117,6 @@ const logout = async () => {
       window.location.reload()
     }
   } catch (_e) {
-    // 出现异常时直接刷新本页，由后端 /auth/me + 中间件重新判断登录状态
     window.location.reload()
   }
 }
@@ -112,29 +126,94 @@ const logout = async () => {
   <div class="flex h-screen bg-gray-50 overflow-hidden">
 
     <aside class="w-64 bg-white border-r border-gray-200 flex flex-col shadow-sm z-20">
-      <div class="h-16 flex items-center justify-center border-b border-gray-100 bg-indigo-600">
-        <h1 class="text-white font-bold text-xl tracking-wider flex items-center gap-2">
-          <span>📊</span> 文档智能平台
+      <div class="h-16 flex items-center justify-center border-b border-gray-100 bg-indigo-600 px-3">
+        <h1
+          class="text-white font-semibold text-base tracking-wide flex items-center gap-2 whitespace-nowrap"
+          title="项目材料独创性智能审查系统"
+        >
+          <svg class="w-4 h-4 text-white/90 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 13h4v8H3v-8zm7-6h4v14h-4V7zm7 3h4v11h-4V10zM3 3h18" />
+          </svg>
+          <span class="leading-none">项目材料独创性智能审查系统</span>
         </h1>
       </div>
 
       <nav class="flex-1 py-6 px-3 space-y-2 overflow-y-auto">
         <NuxtLink
-            v-for="item in menuItems"
-            :key="item.path"
-            :to="item.path"
-            class="flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 group"
-            :class="isActive(item.path)
+          v-for="item in menuTopLinks"
+          :key="item.path"
+          :to="item.path"
+          class="relative flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 group"
+          :class="isNavActive(item.path)
             ? 'bg-indigo-50 text-indigo-700 font-bold shadow-sm'
             : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'"
         >
-          <svg class="w-5 h-5 transition-colors"
-               :class="isActive(item.path) ? 'text-indigo-600' : 'text-gray-400 group-hover:text-gray-600'"
-               fill="none" viewBox="0 0 24 24" stroke="currentColor" v-html="item.icon">
-          </svg>
+          <svg
+            class="w-5 h-5 transition-colors"
+            :class="isNavActive(item.path) ? 'text-indigo-600' : 'text-gray-400 group-hover:text-gray-600'"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            v-html="item.icon"
+          />
           <span>{{ item.name }}</span>
-          <span v-if="isActive(item.path)" class="absolute right-3 w-1.5 h-1.5 bg-indigo-600 rounded-full"></span>
+          <span v-if="isNavActive(item.path)" class="absolute right-3 top-1/2 -translate-y-1/2 w-1.5 h-1.5 bg-indigo-600 rounded-full" />
         </NuxtLink>
+
+        <div
+          class="rounded-lg border transition-colors"
+          :class="isRecordSectionActive ? 'border-indigo-200 bg-indigo-50/50' : 'border-transparent'"
+        >
+          <button
+            type="button"
+            class="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left transition-all duration-200"
+            :class="isRecordSectionActive
+              ? 'text-indigo-800 font-semibold'
+              : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'"
+            :aria-expanded="recordsMenuOpen"
+            aria-controls="nav-records-sub"
+            @click="recordsMenuOpen = !recordsMenuOpen"
+          >
+            <svg
+              class="w-5 h-5 shrink-0"
+              :class="isRecordSectionActive ? 'text-indigo-600' : 'text-gray-400'"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              v-html="recordGroupIcon"
+            />
+            <span class="flex-1">记录</span>
+            <svg
+              class="w-4 h-4 shrink-0 text-gray-400 transition-transform duration-200"
+              :class="recordsMenuOpen ? 'rotate-180' : ''"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke-width="2"
+              stroke="currentColor"
+              aria-hidden="true"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+            </svg>
+          </button>
+          <div
+            v-show="recordsMenuOpen"
+            id="nav-records-sub"
+            class="pb-2 pl-2 space-y-1"
+          >
+            <NuxtLink
+              v-for="sub in recordSubLinks"
+              :key="sub.path"
+              :to="sub.path"
+              class="relative flex items-center gap-2 pl-9 pr-3 py-2 rounded-md text-sm transition-colors"
+              :class="isNavActive(sub.path)
+                ? 'bg-indigo-100 text-indigo-800 font-medium'
+                : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'"
+            >
+              {{ sub.name }}
+              <span v-if="isNavActive(sub.path)" class="absolute right-2 top-1/2 -translate-y-1/2 w-1.5 h-1.5 bg-indigo-600 rounded-full" />
+            </NuxtLink>
+          </div>
+        </div>
       </nav>
 
       <div class="p-4 border-t border-gray-100">
@@ -163,7 +242,7 @@ const logout = async () => {
     <main class="flex-1 flex flex-col h-full overflow-hidden relative">
       <header class="h-16 bg-white border-b border-gray-200 flex items-center px-8 justify-between shadow-sm z-10">
         <h2 class="text-lg font-semibold text-gray-800">
-          {{ menuItems.find((i: { path: string; name: string }) => i.path === route.path)?.name }}
+          {{ currentPageTitle }}
         </h2>
         <div class="flex gap-4 items-center">
           <button class="text-gray-400 hover:text-indigo-600 transition-colors">🔔</button>
@@ -177,7 +256,7 @@ const logout = async () => {
         </div>
       </header>
       <div class="flex-1 overflow-y-auto p-0 bg-gray-50 scroll-smooth">
-        <slot/>
+        <slot />
       </div>
     </main>
   </div>
@@ -185,7 +264,7 @@ const logout = async () => {
 
 <style>
 aside nav svg {
-  width: 1.25rem; /* 20px */
-  height: 1.25rem; /* 20px */
+  width: 1.25rem;
+  height: 1.25rem;
 }
 </style>

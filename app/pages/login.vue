@@ -126,10 +126,10 @@ const handleSsoLogin = async () => {
         📄
       </div>
       <h2 class="text-center text-3xl font-extrabold text-gray-900">
-        智能文档查重平台
+        项目材料独创性智能审查系统
       </h2>
       <p class="mt-2 text-center text-sm text-gray-600">
-        AI 驱动的文档查重与数字化管理系统
+        AI 驱动的项目材料独创性审查与数字化管理系统
       </p>
     </div>
 

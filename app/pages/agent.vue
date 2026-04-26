@@ -5,7 +5,9 @@ import {
   getPaperTaskStatus,
   getPaperTaskResult,
   type PaperTaskVO,
-  type PaperQualityReport
+  type PaperQualityReport,
+  type ImprovementItem,
+  type SectionIssue
 } from '../services/paperApi'
 
 const file = ref<File | null>(null)
@@ -176,12 +178,123 @@ const getDimensionText = (dim: string) => {
   return map[dim] ?? dim
 }
 
+/**
+ * 模型常把「现象 + 需/应/请…」写在同一 problem 中；从中拆出可展示的「建议」段。
+ * 未命中可靠切分时返回 suggestion 为空，保留原文作 problem。
+ */
+const splitProblemWithEmbeddedAction = (text: string): { problem: string; suggestion: string } => {
+  const t = text.trim()
+  const minTotal = 24
+  const minSeg = 8
+  if (t.length < minTotal) return { problem: t, suggestion: '' }
+
+  const patterns = [
+    /[；。]\s*(需|应|请)/,
+    /[）)]\s*(需|应|请)/,
+    /[，,]\s*(需|应|请)/
+  ]
+
+  for (const re of patterns) {
+    const m = t.match(re)
+    if (!m || m.index == null || m.index < 12) continue
+    const rel = m[0].search(/[需应请]/)
+    if (rel < 0) continue
+    const startSuggest = m.index + rel
+    const problem = t.slice(0, m.index).trim()
+    const suggestion = t.slice(startSuggest).trim()
+    if (problem.length < minSeg || suggestion.length < minSeg) continue
+    if (/^无需/.test(suggestion)) continue
+    return { problem, suggestion }
+  }
+
+  return { problem: t, suggestion: '' }
+}
+
+/** 将旧版单段 description 拆成「问题 / 建议」供展示 */
+const splitLegacyDescription = (text: string): { problem: string; suggestion: string } => {
+  if (!text) return { problem: '', suggestion: '' }
+  const splitAt = (re: RegExp): { problem: string; suggestion: string } | null => {
+    const m = text.match(re)
+    if (!m || m.index == null || m.index < 12) return null
+    return {
+      problem: text.slice(0, m.index).trim(),
+      suggestion: text.slice(m.index + m[0].length).trim()
+    }
+  }
+  const tries = [
+    splitAt(/\s*建议[：:]\s*/),
+    splitAt(/\s*Suggestion[：:\s]+/i),
+    splitAt(/\s*[；;]\s*(?=建议)/)
+  ]
+  for (const t of tries) {
+    if (t && t.suggestion.length > 4) return t
+  }
+  const cap = Math.min(220, text.length)
+  const head = text.slice(0, cap)
+  const br = Math.max(head.lastIndexOf('。'), head.lastIndexOf('？'), head.lastIndexOf('！'), head.lastIndexOf('. '))
+  const cut = br > 48 ? br + 1 : cap
+  if (text.length <= cut + 12) return { problem: text, suggestion: '' }
+  return { problem: text.slice(0, cut).trim(), suggestion: text.slice(cut).trim() }
+}
+
+/** 统一为「问题 + 建议 + 详细」三字段，兼容仅有 description 的旧数据 */
+const normalizeGlobalSuggestion = (item: ImprovementItem) => {
+  const detail = (item.detail || '').trim()
+  const p0 = (item.problem || '').trim()
+  const s0 = (item.suggestion || '').trim()
+  const desc = (item.description || '').trim()
+  if (p0 && s0) return { problem: p0, suggestion: s0, detail }
+  if (p0 && !s0 && desc) return { problem: p0, suggestion: desc, detail }
+  if (!p0 && !s0 && desc) {
+    const leg = splitLegacyDescription(desc)
+    return { problem: leg.problem || desc, suggestion: leg.suggestion, detail }
+  }
+  if (p0 && !s0 && !desc) {
+    const emb = splitProblemWithEmbeddedAction(p0)
+    if (emb.suggestion) return { problem: emb.problem, suggestion: emb.suggestion, detail }
+    return { problem: p0, suggestion: '', detail }
+  }
+  if (!p0 && s0) return { problem: desc || '（问题说明见展开内容）', suggestion: s0, detail }
+  return { problem: p0 || desc, suggestion: s0, detail }
+}
+
 const agentStatusEntries = computed(() => {
   const as = task.value?.agentStatus
   if (!as) return []
   const order: (keyof NonNullable<typeof as>)[] = ['plagiarism', 'logic', 'compliance', 'review']
   const labels: Record<string, string> = { plagiarism: '查重', logic: '逻辑', compliance: '规范', review: '汇总' }
   return order.filter(k => as[k] != null).map(k => ({ key: k, label: labels[k], value: as[k] }))
+})
+
+/** 全局建议：预解析 problem / suggestion / detail，避免模板重复计算 */
+const suggestionsDisplay = computed(() => {
+  const list = report.value?.suggestions
+  if (!list?.length) return []
+  return list.map((raw, i) => ({
+    i,
+    raw,
+    ...normalizeGlobalSuggestion(raw)
+  }))
+})
+
+/** 分章节：合并型 problem 拆出建议，供摘要/展开区使用 */
+const normalizeSectionIssueRow = (item: SectionIssue) => {
+  const p = (item.problem || '').trim()
+  const s = (item.suggestion || '').trim()
+  if (s) return { summaryProblem: p, suggestion: s }
+  const emb = splitProblemWithEmbeddedAction(p)
+  if (emb.suggestion) return { summaryProblem: emb.problem, suggestion: emb.suggestion }
+  return { summaryProblem: p, suggestion: s }
+}
+
+const sectionIssuesDisplay = computed(() => {
+  const list = report.value?.sectionIssues
+  if (!list?.length) return []
+  return list.map((raw, i) => ({
+    i,
+    raw,
+    ...normalizeSectionIssueRow(raw)
+  }))
 })
 
 onUnmounted(() => stopPolling())
@@ -200,7 +313,7 @@ onUnmounted(() => stopPolling())
 
     <div class="max-w-5xl mx-auto space-y-8">
       <div class="text-center">
-        <h1 class="text-3xl font-bold text-gray-800">📋 论文查重 / 质检</h1>
+        <h1 class="text-3xl font-bold text-gray-800">📋 文档查重/质检</h1>
         <p class="mt-2 text-gray-500">上传论文后，多 Agent 流水线将依次完成文本抽取、查重、逻辑与规范检查，并给出改进建议。</p>
       </div>
 
@@ -365,47 +478,144 @@ onUnmounted(() => stopPolling())
             </div>
           </div>
 
-          <!-- 全局改进建议 -->
+          <!-- 全局改进建议：折叠仅「问题」，展开仅「建议」+ 详细说明 -->
           <div v-if="report.suggestions?.length" class="space-y-4">
-            <h4 class="font-semibold text-gray-800 flex items-center gap-2">
-              <span class="w-2 h-5 bg-amber-500 rounded"></span>
-              改进建议
-            </h4>
-            <ul class="space-y-3">
+            <div>
+              <h4 class="font-semibold text-slate-900 flex items-center gap-2 text-base tracking-tight">
+                <span class="w-1.5 h-6 bg-amber-500 rounded-full shrink-0" aria-hidden="true" />
+                改进建议
+              </h4>
+              <p class="text-xs text-slate-600 mt-1.5 max-w-2xl leading-relaxed">
+                折叠状态仅展示问题；展开后查看修改建议与补充说明。
+              </p>
+            </div>
+            <ul class="space-y-3" role="list">
               <li
-                v-for="(item, i) in report.suggestions"
-                :key="'s-' + i"
-                class="flex gap-3 p-4 rounded-xl border border-gray-100 bg-white shadow-sm hover:shadow transition-shadow"
+                v-for="row in suggestionsDisplay"
+                :key="'s-' + row.i"
+                class="rounded-2xl border border-slate-200 bg-white shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-200 motion-reduce:transition-none overflow-hidden"
               >
-                <span :class="['shrink-0 px-2 py-1 rounded text-xs border', getSeverityClass(item.severity)]">
-                  {{ item.severity }}
-                </span>
-                <span class="shrink-0 text-xs text-gray-500">{{ getDimensionText(item.dimension) }}</span>
-                <p class="text-sm text-gray-700">{{ item.description }}</p>
+                <details class="group">
+                  <summary
+                    class="feedback-summary cursor-pointer flex items-start gap-3 sm:gap-4 p-4 sm:p-5 w-full text-left group-open:bg-slate-50/90 transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/35 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+                  >
+                    <div class="flex flex-wrap items-center gap-2 shrink-0 max-w-[min(100%,14rem)] sm:max-w-none">
+                      <span
+                        :class="['px-2.5 py-0.5 rounded-md text-[11px] font-semibold tracking-wide border', getSeverityClass(row.raw.severity)]"
+                      >
+                        {{ row.raw.severity }}
+                      </span>
+                      <span class="text-[11px] font-medium tracking-wide text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md">
+                        {{ getDimensionText(row.raw.dimension) }}
+                      </span>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <p class="text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">问题</p>
+                      <p
+                        class="text-sm text-slate-900 leading-relaxed line-clamp-3 group-open:line-clamp-none whitespace-pre-wrap"
+                      >
+                        {{ row.problem }}
+                      </p>
+                    </div>
+                    <span class="sr-only">展开或收起本条建议</span>
+                    <svg
+                      class="w-5 h-5 shrink-0 text-slate-400 self-start mt-1 group-open:rotate-180 transition-transform duration-200 motion-reduce:transition-none"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke-width="1.5"
+                      stroke="currentColor"
+                      aria-hidden="true"
+                    >
+                      <path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                    </svg>
+                  </summary>
+                  <div
+                    class="border-t border-slate-100 bg-gradient-to-b from-indigo-50/50 via-white to-white px-4 sm:px-5 py-4 space-y-4"
+                  >
+                    <template v-if="row.suggestion || row.detail">
+                      <div v-if="row.suggestion">
+                        <p class="text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">建议</p>
+                        <p class="text-sm text-indigo-950 leading-relaxed whitespace-pre-wrap">
+                          {{ row.suggestion }}
+                        </p>
+                      </div>
+                      <div v-if="row.detail">
+                        <p class="text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">详细说明</p>
+                        <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">
+                          {{ row.detail }}
+                        </p>
+                      </div>
+                    </template>
+                    <p v-else class="text-sm text-slate-600 leading-relaxed">
+                      暂无单独列出的修改建议，请根据上述问题在文中对照修改。
+                    </p>
+                  </div>
+                </details>
               </li>
             </ul>
           </div>
 
-          <!-- 分章节问题 -->
+          <!-- 分章节问题：折叠仅「问题」，展开仅「建议」 -->
           <div v-if="report.sectionIssues?.length" class="space-y-4">
-            <h4 class="font-semibold text-gray-800 flex items-center gap-2">
-              <span class="w-2 h-5 bg-red-400 rounded"></span>
-              分章节问题
-            </h4>
-            <ul class="space-y-4">
+            <div>
+              <h4 class="font-semibold text-slate-900 flex items-center gap-2 text-base tracking-tight">
+                <span class="w-1.5 h-6 bg-rose-500 rounded-full shrink-0" aria-hidden="true" />
+                分章节问题
+              </h4>
+              <p class="text-xs text-slate-600 mt-1.5 max-w-2xl leading-relaxed">
+                折叠状态仅展示该处问题；展开后查看对应修改建议。
+              </p>
+            </div>
+            <ul class="space-y-3" role="list">
               <li
-                v-for="(item, i) in report.sectionIssues"
-                :key="'sec-' + i"
-                class="p-4 rounded-xl border border-gray-100 bg-white shadow-sm hover:shadow transition-shadow space-y-2"
+                v-for="row in sectionIssuesDisplay"
+                :key="'sec-' + row.i"
+                class="rounded-2xl border border-slate-200 bg-white shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-200 motion-reduce:transition-none overflow-hidden"
               >
-                <div class="flex flex-wrap items-center gap-2">
-                  <span v-if="item.section" class="text-sm font-medium text-gray-800">{{ item.section }}</span>
-                  <span v-if="item.paragraphIndex != null" class="text-xs text-gray-500">第 {{ item.paragraphIndex }} 段</span>
-                  <span :class="['px-2 py-0.5 rounded text-xs border', getSeverityClass(item.severity)]">{{ item.severity }}</span>
-                  <span class="text-xs text-gray-500">{{ getDimensionText(item.dimension) }}</span>
-                </div>
-                <p class="text-sm text-gray-600"><span class="text-gray-500">问题：</span>{{ item.problem }}</p>
-                <p class="text-sm text-indigo-600"><span class="text-gray-500">建议：</span>{{ item.suggestion }}</p>
+                <details class="group">
+                  <summary
+                    class="feedback-summary cursor-pointer flex items-start gap-3 sm:gap-4 p-4 sm:p-5 w-full text-left group-open:bg-slate-50/90 transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/35 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+                  >
+                    <div class="flex-1 min-w-0 space-y-2">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <span v-if="row.raw.section" class="text-sm font-semibold text-slate-900">{{ row.raw.section }}</span>
+                        <span v-if="row.raw.paragraphIndex != null" class="text-xs text-slate-600 tabular-nums">第 {{ row.raw.paragraphIndex }} 段</span>
+                        <span :class="['px-2.5 py-0.5 rounded-md text-[11px] font-semibold tracking-wide border', getSeverityClass(row.raw.severity)]">{{ row.raw.severity }}</span>
+                        <span class="text-[11px] font-medium tracking-wide text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md">
+                          {{ getDimensionText(row.raw.dimension) }}
+                        </span>
+                      </div>
+                      <div>
+                        <p class="text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">问题</p>
+                        <p class="text-sm text-slate-900 leading-relaxed line-clamp-3 group-open:line-clamp-none whitespace-pre-wrap">
+                          {{ row.summaryProblem }}
+                        </p>
+                      </div>
+                    </div>
+                    <span class="sr-only">展开或收起本条分章节说明</span>
+                    <svg
+                      class="w-5 h-5 shrink-0 text-slate-400 mt-1 group-open:rotate-180 transition-transform duration-200 motion-reduce:transition-none"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke-width="1.5"
+                      stroke="currentColor"
+                      aria-hidden="true"
+                    >
+                      <path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                    </svg>
+                  </summary>
+                  <div
+                    class="border-t border-slate-100 bg-gradient-to-b from-rose-50/40 via-white to-white px-4 sm:px-5 py-4"
+                  >
+                    <p class="text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">建议</p>
+                    <p v-if="row.suggestion" class="text-sm text-indigo-950 leading-relaxed whitespace-pre-wrap">
+                      {{ row.suggestion }}
+                    </p>
+                    <p v-else class="text-sm text-slate-600 leading-relaxed">
+                      暂无单独列出的修改建议，请根据上述问题在该章节内对照修改。
+                    </p>
+                  </div>
+                </details>
               </li>
             </ul>
           </div>
@@ -430,5 +640,13 @@ onUnmounted(() => stopPolling())
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+.feedback-summary {
+  list-style: none;
+}
+
+.feedback-summary::-webkit-details-marker {
+  display: none;
 }
 </style>

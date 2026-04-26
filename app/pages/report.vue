@@ -39,7 +39,7 @@ const downloadReport = () => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>智能文档对比分析报告</title>
+  <title>项目材料独创性智能审查系统报告</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -228,7 +228,7 @@ const downloadReport = () => {
 </head>
 <body>
   <div class="container">
-    <h1>📄 智能文档对比分析报告</h1>
+    <h1>📄 项目材料独创性智能审查系统报告</h1>
     <div class="header-info">
       生成时间: ${reportData.value.timestamp}
     </div>
@@ -308,8 +308,8 @@ const downloadReport = () => {
     ` : ''}
 
     <div class="footer">
-      <p>本报告由智能文档对比系统自动生成，仅供参考。</p>
-      <p style="margin-top: 10px;">© 2026 Smart Document Comparison System</p>
+      <p>本报告由项目材料独创性智能审查系统自动生成，仅供参考。</p>
+      <p style="margin-top: 10px;">© 2026 Project Material Originality Intelligent Review System</p>
     </div>
   </div>
 </body>
@@ -345,7 +345,7 @@ const exportToPdf = () => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>智能文档对比分析报告</title>
+  <title>项目材料独创性智能审查系统报告</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -511,7 +511,7 @@ const exportToPdf = () => {
 </head>
 <body>
   <div class="container">
-    <h1>📄 智能文档对比分析报告</h1>
+    <h1>📄 项目材料独创性智能审查系统报告</h1>
     <div class="header-info">
       生成时间: ${reportData.value.timestamp}
     </div>
@@ -574,8 +574,8 @@ const exportToPdf = () => {
       </div>
     </div>
     ` : ''}
-      <p>本报告由智能文档对比系统自动生成，仅供参考。</p>
-      <p style="margin-top: 10px;">© 2026 Smart Document Comparison System</p>
+      <p>本报告由项目材料独创性智能审查系统自动生成，仅供参考。</p>
+      <p style="margin-top: 10px;">© 2026 Project Material Originality Intelligent Review System</p>
     </div>
   </div>
   <script>
@@ -650,7 +650,7 @@ const exportToPdf = () => {
       <div v-else class="space-y-6">
         <!-- 标题 -->
         <div class="bg-white rounded-lg shadow-lg p-8 text-center border-b-4 border-indigo-600">
-          <h1 class="text-3xl font-bold text-gray-800 mb-2">📄 智能文档对比分析报告</h1>
+          <h1 class="text-3xl font-bold text-gray-800 mb-2">📄 项目材料独创性智能审查系统报告</h1>
           <p class="text-gray-500">生成时间: {{ reportData.timestamp }}</p>
         </div>
 
@@ -741,8 +741,8 @@ const exportToPdf = () => {
 
         <!-- 页脚 -->
         <div class="text-center text-gray-500 text-sm py-6">
-          <p>本报告由智能文档对比系统自动生成，仅供参考。</p>
-          <p class="mt-2">© 2026 Smart Document Comparison System</p>
+          <p>本报告由项目材料独创性智能审查系统自动生成，仅供参考。</p>
+          <p class="mt-2">© 2026 Project Material Originality Intelligent Review System</p>
         </div>
         </div>
       </div>

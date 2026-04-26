@@ -200,7 +200,7 @@ const exportReport = () => {
     </transition>
 
     <div class="max-w-7xl mx-auto space-y-8">
-      <h1 class="text-3xl font-bold text-gray-800 text-center">📄 智能文档对比系统</h1>
+      <h1 class="text-3xl font-bold text-gray-800 text-center">📄 项目材料独创性智能审查系统</h1>
 
       <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
 
