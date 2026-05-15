@@ -4,7 +4,7 @@ import {
   fetchAgencyAgentDepartments,
   fetchAgencyAgentDetail,
   fetchAgencyAgents,
-  runAgencyAgent,
+  runAgencyAgentStream,
   type AgencyAgentAttachment,
   type AgencyAgentChatMessage,
   type AgencyAgentDepartment,
@@ -16,6 +16,8 @@ type ChatEntry = {
   role: 'user' | 'assistant'
   content: string
   attachments?: AgencyAgentAttachment[]
+  pending?: boolean
+  failed?: boolean
 }
 
 type CurrentUser = {
@@ -113,6 +115,7 @@ const normalizeChatContent = (content?: string | null) =>
 const getChatDisplayContent = (item: ChatEntry) => {
   const content = normalizeChatContent(item.content)
   if (content) return content
+  if (item.role === 'assistant' && item.pending) return '正在处理...'
   return item.role === 'assistant' ? 'Agent 未返回内容' : ''
 }
 
@@ -224,22 +227,66 @@ const runCurrentAgent = async () => {
   selectedFiles.value = []
   if (fileInput.value) fileInput.value.value = ''
 
+  const assistantIndex = chat.value.push({
+    role: 'assistant',
+    content: '',
+    attachments: [],
+    pending: true
+  }) - 1
+  const updateAssistant = (update: (entry: ChatEntry) => void) => {
+    const entry = chat.value[assistantIndex]
+    if (entry) update(entry)
+  }
+
   try {
-    const res = await runAgencyAgent(selectedAgent.value.id, currentMessage, history, currentFiles)
-    const content = normalizeChatContent(res.content)
-    chat.value.push({
-      role: 'assistant',
-      content: content || 'Agent 未返回内容',
-      attachments: res.attachments || []
+    await runAgencyAgentStream(selectedAgent.value.id, currentMessage, history, currentFiles, (event) => {
+      updateAssistant(entry => {
+        if (event.type === 'META') {
+          entry.attachments = event.attachments || []
+          return
+        }
+        if (event.type === 'DELTA') {
+          entry.content += event.content || ''
+          return
+        }
+        if (event.type === 'ERROR') {
+          const message = event.message || 'Agent 运行失败'
+          errorMsg.value = message
+          entry.pending = false
+          entry.failed = true
+          entry.content = entry.content
+            ? `${entry.content}\n\n运行失败：${message}`
+            : `运行失败：${message}`
+          return
+        }
+        if (event.type === 'DONE') {
+          entry.pending = false
+          if (!normalizeChatContent(entry.content)) {
+            entry.content = 'Agent 未返回内容'
+          }
+        }
+      })
+    })
+    updateAssistant(entry => {
+      entry.pending = false
+      if (!entry.failed && !normalizeChatContent(entry.content)) {
+        entry.content = 'Agent 未返回内容'
+      }
     })
   } catch (e: any) {
     errorMsg.value = e?.message || 'Agent 运行失败'
-    chat.value.push({
-      role: 'assistant',
-      content: `运行失败：${errorMsg.value}`
+    updateAssistant(entry => {
+      entry.pending = false
+      entry.failed = true
+      entry.content = entry.content
+        ? `${entry.content}\n\n运行失败：${errorMsg.value}`
+        : `运行失败：${errorMsg.value}`
     })
   } finally {
     running.value = false
+    updateAssistant(entry => {
+      entry.pending = false
+    })
   }
 }
 
@@ -582,10 +629,13 @@ onUnmounted(() => {
                     {{ item.role === 'user' ? currentUserChatTitle : selectedAgent?.name || 'Agent' }}
                   </span>
                   <span
-                    v-if="item.role === 'assistant' && index === chat.length - 1 && !running"
-                    class="inline-flex items-center gap-1 rounded-full bg-teal-50 px-2 py-0.5 text-[11px] font-medium text-teal-700 ring-1 ring-teal-100"
+                    v-if="item.role === 'assistant' && index === chat.length - 1 && !item.failed"
+                    class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1"
+                    :class="item.pending
+                      ? 'bg-amber-50 text-amber-700 ring-amber-100'
+                      : 'bg-teal-50 text-teal-700 ring-teal-100'"
                   >
-                    运行完成
+                    {{ item.pending ? '运行中' : '运行完成' }}
                   </span>
                 </div>
                 <div
@@ -613,17 +663,6 @@ onUnmounted(() => {
                 </div>
               </div>
             </article>
-            <div v-if="running" class="flex justify-start">
-              <div
-                class="mr-3 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-teal-100 bg-white text-lg leading-none shadow-sm"
-                :title="selectedAgent?.name || 'Agent'"
-              >
-                {{ selectedAgent?.emoji || '◆' }}
-              </div>
-              <div class="max-w-[88%] rounded-lg rounded-tl-sm border border-teal-100 bg-white px-4 py-3 text-sm font-medium text-teal-700 shadow-sm sm:max-w-[76%] xl:max-w-[68%]">
-                {{ selectedAgent?.name }} 正在处理...
-              </div>
-            </div>
           </div>
         </div>
 
