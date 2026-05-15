@@ -45,13 +45,30 @@ export interface AgencyAgentChatResponse {
   attachments: AgencyAgentAttachment[]
 }
 
+export interface AgencyAgentRouteCandidate {
+  agentId: string
+  agentName: string
+  departmentName: string
+  emoji?: string
+  confidence?: number
+  reason?: string
+}
+
 export interface AgencyAgentChatStreamEvent {
   type: 'META' | 'DELTA' | 'DONE' | 'ERROR' | string
   agentId?: string
   agentName?: string
+  departmentName?: string
+  emoji?: string
   content?: string
   attachments?: AgencyAgentAttachment[]
   message?: string
+  routeStatus?: 'MATCHED' | 'NEEDS_CLARIFICATION' | 'WORKBENCH_HELP' | 'FAILED' | string
+  confidence?: number
+  reason?: string
+  clarificationQuestion?: string
+  requiresConfirmation?: boolean
+  candidates?: AgencyAgentRouteCandidate[]
 }
 
 export const fetchAgencyAgentDepartments = async (): Promise<AgencyAgentDepartment[]> => {
@@ -124,6 +141,73 @@ export const runAgencyAgentStream = async (
   })
 
   if (!response.body) throw new Error('Agent 流式响应为空')
+  const contentType = response.headers.get('content-type') || ''
+  if (!response.ok && !contentType.includes('text/event-stream')) {
+    throw new Error(`Agent API Error: ${response.status}`)
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+  let hasEvent = false
+
+  const consumeLine = (line: string) => {
+    const trimmed = line.trim()
+    if (!trimmed || !trimmed.startsWith('data:')) return
+    const jsonText = trimmed.substring(5).trim()
+    if (!jsonText || jsonText === '[DONE]') return
+    hasEvent = true
+    onEvent(JSON.parse(jsonText) as AgencyAgentChatStreamEvent)
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+    for (const line of lines) {
+      consumeLine(line)
+    }
+  }
+
+  const tail = decoder.decode()
+  if (tail) buffer += tail
+  if (buffer.trim()) {
+    consumeLine(buffer)
+  }
+
+  if (!response.ok && !hasEvent) {
+    throw new Error(`Agent API Error: ${response.status}`)
+  }
+}
+
+export const runAgencyAgentAutoRouteStream = async (
+  message: string,
+  history: AgencyAgentChatMessage[],
+  files: File[],
+  lastAgentId: string | null | undefined,
+  onEvent: (event: AgencyAgentChatStreamEvent) => void
+): Promise<void> => {
+  const formData = new FormData()
+  formData.append('message', message)
+  if (history.length) {
+    formData.append('historyJson', JSON.stringify(history))
+  }
+  if (lastAgentId) {
+    formData.append('lastAgentId', lastAgentId)
+  }
+  for (const file of files) {
+    formData.append('files', file)
+  }
+
+  const response = await fetch('/api/agency-agents/auto-chat/stream', {
+    method: 'POST',
+    credentials: 'include',
+    body: formData
+  })
+
+  if (!response.body) throw new Error('Agent 自动路由流式响应为空')
   const contentType = response.headers.get('content-type') || ''
   if (!response.ok && !contentType.includes('text/event-stream')) {
     throw new Error(`Agent API Error: ${response.status}`)

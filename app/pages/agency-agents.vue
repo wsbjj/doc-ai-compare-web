@@ -4,11 +4,14 @@ import {
   fetchAgencyAgentDepartments,
   fetchAgencyAgentDetail,
   fetchAgencyAgents,
+  runAgencyAgentAutoRouteStream,
   runAgencyAgentStream,
   type AgencyAgentAttachment,
   type AgencyAgentChatMessage,
+  type AgencyAgentChatStreamEvent,
   type AgencyAgentDepartment,
   type AgencyAgentDetail,
+  type AgencyAgentRouteCandidate,
   type AgencyAgentSummary
 } from '~/services/agencyAgentsApi'
 
@@ -16,6 +19,12 @@ type ChatEntry = {
   role: 'user' | 'assistant'
   content: string
   attachments?: AgencyAgentAttachment[]
+  agentId?: string
+  agentName?: string
+  agentEmoji?: string
+  routeReason?: string
+  routeStatus?: string
+  routeCandidates?: AgencyAgentRouteCandidate[]
   pending?: boolean
   failed?: boolean
 }
@@ -52,6 +61,9 @@ const running = ref(false)
 const errorMsg = ref('')
 const showMarkdown = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
+const autoRouteEnabled = ref(false)
+const autoRouteStorageKey = 'agency-agents-auto-route-enabled'
+const lastAutoRouteAgentId = ref<string | null>(null)
 const workbenchMenuCollapsed = ref(false)
 const workbenchMenuStorageKey = 'agency-agents-workbench-menu-collapsed'
 const agentListCollapsed = ref(false)
@@ -90,14 +102,16 @@ const currentUserChatTitle = computed(() => {
   return number ? `${currentUserIdentityName.value}：${number}` : '我'
 })
 
+const hasRunnableInput = computed(() => !!message.value.trim() || selectedFiles.value.length > 0)
+
 const canRun = computed(() =>
-  !!selectedAgent.value && !running.value && (!!message.value.trim() || selectedFiles.value.length > 0)
+  !running.value && hasRunnableInput.value && (autoRouteEnabled.value || !!selectedAgent.value)
 )
 
 const runStatusText = computed(() => {
   if (running.value) return '运行中'
   if (chat.value.some(item => item.role === 'assistant')) return '运行完成'
-  return '待运行'
+  return autoRouteEnabled.value ? '自动匹配 Agent' : '待运行'
 })
 
 const chatHistoryForBackend = computed<AgencyAgentChatMessage[]>(() =>
@@ -120,6 +134,22 @@ const getChatDisplayContent = (item: ChatEntry) => {
 }
 
 const renderAssistantMarkdown = (item: ChatEntry) => assistantMarkdown.render(getChatDisplayContent(item))
+
+const getEntryAgentName = (item: ChatEntry) =>
+  item.agentName || selectedAgent.value?.name || 'Agent'
+
+const getEntryAgentEmoji = (item: ChatEntry) =>
+  item.agentEmoji || selectedAgent.value?.emoji || '◆'
+
+const currentInputPlaceholder = computed(() => {
+  if (autoRouteEnabled.value) return '描述任务，系统会自动匹配 Agent'
+  return selectedAgent.value ? `交给「${selectedAgent.value.name}」处理` : '请选择一个 Agent'
+})
+
+const toggleAutoRoute = () => {
+  autoRouteEnabled.value = !autoRouteEnabled.value
+  errorMsg.value = ''
+}
 
 const loadCurrentUser = async () => {
   try {
@@ -209,13 +239,25 @@ const removeFile = (index: number) => {
 const clearChat = () => {
   chat.value = []
   errorMsg.value = ''
+  lastAutoRouteAgentId.value = null
 }
 
 const runCurrentAgent = async () => {
-  if (!selectedAgent.value || !canRun.value) return
+  if (!canRun.value) return
+  const manualAgent = selectedAgent.value
+  if (!autoRouteEnabled.value && !manualAgent) return
+
   const currentMessage = message.value.trim()
   const currentFiles = [...selectedFiles.value]
   const history = [...chatHistoryForBackend.value]
+  let autoRouteMatched = false
+  let shouldRestoreCurrentFiles = false
+
+  const restoreCurrentFiles = () => {
+    if (autoRouteEnabled.value && currentFiles.length && shouldRestoreCurrentFiles && !selectedFiles.value.length) {
+      selectedFiles.value = currentFiles
+    }
+  }
 
   running.value = true
   errorMsg.value = ''
@@ -231,6 +273,9 @@ const runCurrentAgent = async () => {
     role: 'assistant',
     content: '',
     attachments: [],
+    agentId: autoRouteEnabled.value ? undefined : manualAgent?.id,
+    agentName: autoRouteEnabled.value ? '自动路由' : manualAgent?.name,
+    agentEmoji: autoRouteEnabled.value ? '◇' : manualAgent?.emoji,
     pending: true
   }) - 1
   const updateAssistant = (update: (entry: ChatEntry) => void) => {
@@ -238,35 +283,77 @@ const runCurrentAgent = async () => {
     if (entry) update(entry)
   }
 
-  try {
-    await runAgencyAgentStream(selectedAgent.value.id, currentMessage, history, currentFiles, (event) => {
-      updateAssistant(entry => {
-        if (event.type === 'META') {
-          entry.attachments = event.attachments || []
-          return
+  const applyStreamEvent = (event: AgencyAgentChatStreamEvent) => {
+    updateAssistant(entry => {
+      if (event.agentId) entry.agentId = event.agentId
+      if (event.agentName) entry.agentName = event.agentName
+      if (event.emoji) entry.agentEmoji = event.emoji
+
+      if (event.type === 'ROUTE') {
+        entry.routeStatus = event.routeStatus
+        entry.routeReason = event.reason
+        entry.routeCandidates = event.candidates || []
+        if (event.routeStatus === 'MATCHED' && event.agentId) {
+          autoRouteMatched = true
+          lastAutoRouteAgentId.value = event.agentId
         }
-        if (event.type === 'DELTA') {
-          entry.content += event.content || ''
-          return
-        }
-        if (event.type === 'ERROR') {
-          const message = event.message || 'Agent 运行失败'
-          errorMsg.value = message
-          entry.pending = false
-          entry.failed = true
+        if (event.content) {
           entry.content = entry.content
-            ? `${entry.content}\n\n运行失败：${message}`
-            : `运行失败：${message}`
-          return
-        }
-        if (event.type === 'DONE') {
-          entry.pending = false
-          if (!normalizeChatContent(entry.content)) {
-            entry.content = 'Agent 未返回内容'
+            ? `${entry.content}\n\n${event.content}`
+            : event.content
+          if (event.routeStatus === 'MATCHED') {
+            entry.content += '\n\n'
           }
         }
-      })
+        if (event.routeStatus === 'NEEDS_CLARIFICATION' || event.routeStatus === 'WORKBENCH_HELP') {
+          shouldRestoreCurrentFiles = true
+          entry.pending = false
+        }
+        return
+      }
+
+      if (event.type === 'META') {
+        entry.attachments = event.attachments || []
+        return
+      }
+      if (event.type === 'DELTA') {
+        entry.content += event.content || ''
+        return
+      }
+      if (event.type === 'ERROR') {
+        const message = event.message || 'Agent 运行失败'
+        errorMsg.value = message
+        if (autoRouteEnabled.value && !autoRouteMatched) {
+          shouldRestoreCurrentFiles = true
+        }
+        entry.pending = false
+        entry.failed = true
+        entry.content = entry.content
+          ? `${entry.content}\n\n运行失败：${message}`
+          : `运行失败：${message}`
+        return
+      }
+      if (event.type === 'DONE') {
+        entry.pending = false
+        if (!normalizeChatContent(entry.content)) {
+          entry.content = 'Agent 未返回内容'
+        }
+      }
     })
+  }
+
+  try {
+    if (autoRouteEnabled.value) {
+      await runAgencyAgentAutoRouteStream(
+        currentMessage,
+        history,
+        currentFiles,
+        lastAutoRouteAgentId.value,
+        applyStreamEvent
+      )
+    } else if (manualAgent) {
+      await runAgencyAgentStream(manualAgent.id, currentMessage, history, currentFiles, applyStreamEvent)
+    }
     updateAssistant(entry => {
       entry.pending = false
       if (!entry.failed && !normalizeChatContent(entry.content)) {
@@ -275,6 +362,9 @@ const runCurrentAgent = async () => {
     })
   } catch (e: any) {
     errorMsg.value = e?.message || 'Agent 运行失败'
+    if (autoRouteEnabled.value && !autoRouteMatched) {
+      shouldRestoreCurrentFiles = true
+    }
     updateAssistant(entry => {
       entry.pending = false
       entry.failed = true
@@ -283,6 +373,7 @@ const runCurrentAgent = async () => {
         : `运行失败：${errorMsg.value}`
     })
   } finally {
+    restoreCurrentFiles()
     running.value = false
     updateAssistant(entry => {
       entry.pending = false
@@ -320,8 +411,15 @@ watch(agentListCollapsed, value => {
   }
 })
 
+watch(autoRouteEnabled, value => {
+  if (process.client) {
+    localStorage.setItem(autoRouteStorageKey, value ? '1' : '0')
+  }
+})
+
 onMounted(async () => {
   if (process.client) {
+    autoRouteEnabled.value = localStorage.getItem(autoRouteStorageKey) === '1'
     workbenchMenuCollapsed.value = localStorage.getItem(workbenchMenuStorageKey) === '1'
     agentListCollapsed.value = localStorage.getItem(agentListStorageKey) === '1'
   }
@@ -340,12 +438,13 @@ onUnmounted(() => {
     <div
       class="workbench-grid h-full grid grid-cols-1 border-t border-slate-200"
       :class="{
+        'auto-route': autoRouteEnabled,
         'menu-collapsed': workbenchMenuCollapsed,
         'agent-list-collapsed': agentListCollapsed
       }"
     >
       <aside
-        v-show="!workbenchMenuCollapsed"
+        v-show="!autoRouteEnabled && !workbenchMenuCollapsed"
         class="bg-[#fbfaf6] border-r border-slate-200 min-h-0 flex flex-col transition-[width] duration-200"
       >
         <div class="border-b border-slate-200 p-2">
@@ -433,7 +532,7 @@ onUnmounted(() => {
       </aside>
 
       <section
-        v-show="!agentListCollapsed"
+        v-show="!autoRouteEnabled && !agentListCollapsed"
         class="bg-white border-r border-slate-200 min-h-0 flex flex-col"
       >
         <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between gap-3">
@@ -503,11 +602,43 @@ onUnmounted(() => {
 
       <main class="min-h-0 bg-[#f8f4ee] flex flex-col">
         <div class="border-b border-slate-200 bg-[#fbfaf6] px-6 py-5">
-          <div v-if="selectedAgent" class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div v-if="autoRouteEnabled" class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div class="min-w-0 max-w-3xl">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-teal-100 bg-white text-lg text-teal-700">◇</span>
+                <h2 class="text-2xl font-bold tracking-tight text-slate-950">自动路由模式</h2>
+                <span class="rounded-full bg-teal-50 px-2.5 py-1 text-xs font-medium text-teal-700 ring-1 ring-teal-100">
+                  自动匹配 Agent
+                </span>
+              </div>
+              <p class="mt-2 text-slate-600 leading-relaxed">输入任务后，系统会根据 Agent skill 元数据自动选择最合适的角色。</p>
+            </div>
+            <div class="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                class="inline-flex items-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm font-medium text-teal-700 transition hover:bg-teal-100"
+                @click="toggleAutoRoute"
+              >
+                <span class="h-2 w-2 rounded-full bg-teal-500"></span>
+                关闭自动路由
+              </button>
+              <button
+                type="button"
+                class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                @click="clearChat"
+              >
+                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v6h6M20 20v-6h-6M5 19A9 9 0 0019 5" />
+                </svg>
+                清空
+              </button>
+            </div>
+          </div>
+          <div v-else-if="selectedAgent" class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div class="min-w-0 max-w-3xl">
               <div class="flex flex-wrap items-center gap-2">
                 <button
-                  v-if="agentListCollapsed"
+                  v-if="!autoRouteEnabled && agentListCollapsed"
                   type="button"
                   class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-950"
                   title="展开 Agent 列表"
@@ -518,7 +649,7 @@ onUnmounted(() => {
                   </svg>
                 </button>
                 <button
-                  v-if="agentListCollapsed && workbenchMenuCollapsed"
+                  v-if="!autoRouteEnabled && agentListCollapsed && workbenchMenuCollapsed"
                   type="button"
                   class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-950"
                   title="展开部门菜单"
@@ -537,6 +668,14 @@ onUnmounted(() => {
               <p class="mt-2 text-slate-600 leading-relaxed">{{ selectedAgent.description }}</p>
             </div>
             <div class="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                class="inline-flex items-center gap-2 rounded-lg border border-teal-200 bg-white px-3 py-2 text-sm font-medium text-teal-700 transition hover:bg-teal-50"
+                @click="toggleAutoRoute"
+              >
+                <span class="h-2 w-2 rounded-full bg-slate-300"></span>
+                自动路由
+              </button>
               <button
                 type="button"
                 class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
@@ -561,7 +700,7 @@ onUnmounted(() => {
           </div>
           <div v-else class="flex items-center gap-2 text-sm text-slate-500">
             <button
-              v-if="agentListCollapsed"
+              v-if="!autoRouteEnabled && agentListCollapsed"
               type="button"
               class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-950"
               title="展开 Agent 列表"
@@ -572,7 +711,7 @@ onUnmounted(() => {
               </svg>
             </button>
             <button
-              v-if="agentListCollapsed && workbenchMenuCollapsed"
+              v-if="!autoRouteEnabled && agentListCollapsed && workbenchMenuCollapsed"
               type="button"
               class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-950"
               title="展开部门菜单"
@@ -581,6 +720,14 @@ onUnmounted(() => {
               <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h10M4 18h16" />
               </svg>
+            </button>
+            <button
+              type="button"
+              class="inline-flex items-center gap-2 rounded-lg border border-teal-200 bg-white px-3 py-2 text-sm font-medium text-teal-700 transition hover:bg-teal-50"
+              @click="toggleAutoRoute"
+            >
+              <span class="h-2 w-2 rounded-full bg-slate-300"></span>
+              自动路由
             </button>
             <span>{{ loadingDetail ? '加载角色中...' : '请选择一个 Agent' }}</span>
           </div>
@@ -593,7 +740,9 @@ onUnmounted(() => {
 
           <div v-if="!chat.length" class="h-full min-h-[320px] rounded-lg border border-dashed border-slate-300 bg-white/60 flex items-center justify-center text-slate-500">
             <div class="text-center">
-              <p class="text-sm font-medium">交给「{{ selectedAgent?.name || 'Agent' }}」处理</p>
+              <p class="text-sm font-medium">
+                {{ autoRouteEnabled ? '输入任务后自动匹配 Agent' : `交给「${selectedAgent?.name || 'Agent'}」处理` }}
+              </p>
               <p class="mt-1 text-xs text-slate-400">本页会保留当前对话上下文</p>
             </div>
           </div>
@@ -610,9 +759,9 @@ onUnmounted(() => {
               <div
                 v-if="item.role === 'assistant'"
                 class="mr-3 mt-5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-teal-100 bg-white text-lg leading-none shadow-sm"
-                :title="selectedAgent?.name || 'Agent'"
+                :title="getEntryAgentName(item)"
               >
-                {{ selectedAgent?.emoji || '◆' }}
+                {{ getEntryAgentEmoji(item) }}
               </div>
               <div
                 class="flex min-w-0 max-w-[88%] flex-col sm:max-w-[76%] xl:max-w-[68%]"
@@ -626,7 +775,7 @@ onUnmounted(() => {
                     class="font-semibold"
                     :class="item.role === 'user' ? 'text-[#8f4d3a]' : 'text-teal-700'"
                   >
-                    {{ item.role === 'user' ? currentUserChatTitle : selectedAgent?.name || 'Agent' }}
+                    {{ item.role === 'user' ? currentUserChatTitle : getEntryAgentName(item) }}
                   </span>
                   <span
                     v-if="item.role === 'assistant' && index === chat.length - 1 && !item.failed"
@@ -672,7 +821,7 @@ onUnmounted(() => {
               v-model="message"
               rows="3"
               class="block min-h-[96px] w-full resize-none border-0 bg-transparent px-4 py-3 text-sm leading-6 text-slate-900 outline-none placeholder:text-slate-400"
-              :placeholder="selectedAgent ? `交给「${selectedAgent.name}」处理` : '请选择一个 Agent'"
+              :placeholder="currentInputPlaceholder"
             />
 
             <div v-if="selectedFiles.length" class="flex flex-wrap gap-2 border-t border-slate-100 px-3 py-3">
@@ -925,6 +1074,13 @@ onUnmounted(() => {
   }
 
   .workbench-grid.menu-collapsed.agent-list-collapsed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workbench-grid.auto-route,
+  .workbench-grid.auto-route.menu-collapsed,
+  .workbench-grid.auto-route.agent-list-collapsed,
+  .workbench-grid.auto-route.menu-collapsed.agent-list-collapsed {
     grid-template-columns: minmax(0, 1fr);
   }
 }
