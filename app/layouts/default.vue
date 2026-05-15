@@ -7,6 +7,8 @@ const userStudentNo = ref<string | null>(null)
 const userAvatar = ref<string | null>(null)
 
 const recordsMenuOpen = ref(true)
+const sidebarCollapsed = ref(false)
+const sidebarStorageKey = 'doc-ai-sidebar-collapsed'
 
 type TopLink = { name: string; path: string; icon: string }
 
@@ -35,6 +37,11 @@ const menuTopLinks: TopLink[] = [
     name: '文档质检',
     path: '/agent',
     icon: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />'
+  },
+  {
+    name: 'Agent 工作台',
+    path: '/agency-agents',
+    icon: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a7 7 0 017 7v3a3 3 0 01-3 3H8a3 3 0 01-3-3v-3a7 7 0 017-7zm-3 7h.01M15 13h.01M9 17h6M4 13H2m20 0h-2" />'
   }
 ]
 
@@ -62,6 +69,12 @@ const isRecordSectionActive = computed(() =>
   recordSubLinks.some(s => route.path === s.path)
 )
 
+watch(sidebarCollapsed, value => {
+  if (process.client) {
+    localStorage.setItem(sidebarStorageKey, value ? '1' : '0')
+  }
+})
+
 const normalizeAvatarSrc = (avatar?: string | null): string | null => {
   if (!avatar) return null
   if (avatar.startsWith('data:image/')) return avatar
@@ -74,6 +87,10 @@ const normalizeAvatarSrc = (avatar?: string | null): string | null => {
 }
 
 onMounted(async () => {
+  if (process.client) {
+    sidebarCollapsed.value = localStorage.getItem(sidebarStorageKey) === '1'
+  }
+
   try {
     const res = await $fetch<{
       code: number
@@ -125,17 +142,33 @@ const logout = async () => {
 <template>
   <div class="flex h-screen bg-gray-50 overflow-hidden">
 
-    <aside class="w-64 bg-white border-r border-gray-200 flex flex-col shadow-sm z-20">
-      <div class="h-16 flex items-center justify-center border-b border-gray-100 bg-indigo-600 px-3">
+    <aside
+      class="bg-white border-r border-gray-200 flex flex-col shadow-sm z-20 transition-[width] duration-200"
+      :class="sidebarCollapsed ? 'w-20' : 'w-64'"
+    >
+      <div
+        class="h-16 flex items-center border-b border-gray-100 bg-indigo-600 px-3"
+        :class="sidebarCollapsed ? 'justify-center gap-1' : 'justify-between gap-2'"
+      >
         <h1
-          class="text-white font-semibold text-base tracking-wide flex items-center gap-2 whitespace-nowrap"
+          class="min-w-0 text-white font-semibold text-base tracking-wide flex items-center gap-2 whitespace-nowrap"
           title="项目材料独创性智能审查系统"
         >
           <svg class="w-4 h-4 text-white/90 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 13h4v8H3v-8zm7-6h4v14h-4V7zm7 3h4v11h-4V10zM3 3h18" />
           </svg>
-          <span class="leading-none">项目材料独创性智能审查系统</span>
+          <span v-show="!sidebarCollapsed" class="leading-none truncate">项目材料独创性智能审查系统</span>
         </h1>
+        <button
+          type="button"
+          class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-white/80 transition hover:bg-white/10 hover:text-white"
+          :title="sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'"
+          @click="sidebarCollapsed = !sidebarCollapsed"
+        >
+          <svg class="h-5 w-5 transition-transform" :class="sidebarCollapsed ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+          </svg>
+        </button>
       </div>
 
       <nav class="flex-1 py-6 px-3 space-y-2 overflow-y-auto">
@@ -144,9 +177,13 @@ const logout = async () => {
           :key="item.path"
           :to="item.path"
           class="relative flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 group"
-          :class="isNavActive(item.path)
-            ? 'bg-indigo-50 text-indigo-700 font-bold shadow-sm'
-            : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'"
+          :title="sidebarCollapsed ? item.name : undefined"
+          :class="[
+            isNavActive(item.path)
+              ? 'bg-indigo-50 text-indigo-700 font-bold shadow-sm'
+              : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900',
+            sidebarCollapsed ? 'justify-center px-0' : ''
+          ]"
         >
           <svg
             class="w-5 h-5 transition-colors"
@@ -156,7 +193,7 @@ const logout = async () => {
             stroke="currentColor"
             v-html="item.icon"
           />
-          <span>{{ item.name }}</span>
+          <span v-show="!sidebarCollapsed">{{ item.name }}</span>
           <span v-if="isNavActive(item.path)" class="absolute right-3 top-1/2 -translate-y-1/2 w-1.5 h-1.5 bg-indigo-600 rounded-full" />
         </NuxtLink>
 
@@ -167,9 +204,13 @@ const logout = async () => {
           <button
             type="button"
             class="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left transition-all duration-200"
-            :class="isRecordSectionActive
-              ? 'text-indigo-800 font-semibold'
-              : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'"
+            :title="sidebarCollapsed ? '记录' : undefined"
+            :class="[
+              isRecordSectionActive
+                ? 'text-indigo-800 font-semibold'
+                : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900',
+              sidebarCollapsed ? 'justify-center px-0' : ''
+            ]"
             :aria-expanded="recordsMenuOpen"
             aria-controls="nav-records-sub"
             @click="recordsMenuOpen = !recordsMenuOpen"
@@ -182,8 +223,9 @@ const logout = async () => {
               stroke="currentColor"
               v-html="recordGroupIcon"
             />
-            <span class="flex-1">记录</span>
+            <span v-show="!sidebarCollapsed" class="flex-1">记录</span>
             <svg
+              v-show="!sidebarCollapsed"
               class="w-4 h-4 shrink-0 text-gray-400 transition-transform duration-200"
               :class="recordsMenuOpen ? 'rotate-180' : ''"
               fill="none"
@@ -196,7 +238,7 @@ const logout = async () => {
             </svg>
           </button>
           <div
-            v-show="recordsMenuOpen"
+            v-show="recordsMenuOpen && !sidebarCollapsed"
             id="nav-records-sub"
             class="pb-2 pl-2 space-y-1"
           >
@@ -217,7 +259,7 @@ const logout = async () => {
       </nav>
 
       <div class="p-4 border-t border-gray-100">
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-3" :class="sidebarCollapsed ? 'justify-center' : ''">
           <div class="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center overflow-hidden">
             <img
               v-if="normalizeAvatarSrc(userAvatar)"
@@ -227,7 +269,7 @@ const logout = async () => {
             />
             <div v-else class="text-lg">👨‍💻</div>
           </div>
-          <div>
+          <div v-show="!sidebarCollapsed" class="min-w-0">
             <p class="text-sm font-medium text-gray-700">
               {{ userName || userId || '系统管理员' }}
             </p>
