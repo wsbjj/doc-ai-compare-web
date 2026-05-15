@@ -85,7 +85,7 @@ const loadAgents = async () => {
     agents.value = list
     const stillVisible = list.some(item => item.id === selectedAgentId.value)
     if (list.length && (!selectedAgentId.value || !stillVisible)) {
-      await selectAgent(list[0].id, true)
+      await selectAgent(list[0].id)
     } else if (!list.length) {
       selectedAgentId.value = null
       selectedAgent.value = null
