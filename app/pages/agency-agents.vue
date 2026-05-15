@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import MarkdownIt from 'markdown-it'
 import {
   fetchAgencyAgentDepartments,
   fetchAgencyAgentDetail,
@@ -17,11 +18,27 @@ type ChatEntry = {
   attachments?: AgencyAgentAttachment[]
 }
 
+type CurrentUser = {
+  id?: string
+  name?: string
+  realName?: string
+  studentNo?: string
+  typeCode?: string
+  typeName?: string
+}
+
+const assistantMarkdown = new MarkdownIt({
+  html: false,
+  linkify: true,
+  breaks: false
+})
+
 const departments = ref<AgencyAgentDepartment[]>([])
 const agents = ref<AgencyAgentSummary[]>([])
 const selectedDepartmentId = ref('all')
 const selectedAgentId = ref<string | null>(null)
 const selectedAgent = ref<AgencyAgentDetail | null>(null)
+const currentUser = ref<CurrentUser | null>(null)
 const keyword = ref('')
 const message = ref('')
 const selectedFiles = ref<File[]>([])
@@ -50,6 +67,27 @@ const activeDepartment = computed(() =>
     : departments.value.find(item => item.id === selectedDepartmentId.value)
 )
 
+const currentUserNumber = computed(() =>
+  currentUser.value?.studentNo?.trim() || currentUser.value?.id?.trim() || ''
+)
+
+const currentUserIdentityName = computed(() => {
+  const typeCode = currentUser.value?.typeCode?.trim().toUpperCase()
+  const typeName = currentUser.value?.typeName?.trim() || ''
+
+  if (typeCode?.startsWith('S') || /学生|本科|专科|研究生|硕士|博士/.test(typeName)) {
+    return '学号'
+  }
+
+  if (typeCode || typeName) return '工号'
+  return '学号/工号'
+})
+
+const currentUserChatTitle = computed(() => {
+  const number = currentUserNumber.value
+  return number ? `${currentUserIdentityName.value}：${number}` : '我'
+})
+
 const canRun = computed(() =>
   !!selectedAgent.value && !running.value && (!!message.value.trim() || selectedFiles.value.length > 0)
 )
@@ -66,6 +104,38 @@ const chatHistoryForBackend = computed<AgencyAgentChatMessage[]>(() =>
     .slice(-8)
     .map(item => ({ role: item.role, content: item.content }))
 )
+
+const normalizeChatContent = (content?: string | null) =>
+  (content || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/^[\s\u200B-\u200D\uFEFF]+|[\s\u200B-\u200D\uFEFF]+$/g, '')
+
+const getChatDisplayContent = (item: ChatEntry) => {
+  const content = normalizeChatContent(item.content)
+  if (content) return content
+  return item.role === 'assistant' ? 'Agent 未返回内容' : ''
+}
+
+const renderAssistantMarkdown = (item: ChatEntry) => assistantMarkdown.render(getChatDisplayContent(item))
+
+const loadCurrentUser = async () => {
+  try {
+    const res = await $fetch<{
+      code: number
+      data?: {
+        loggedIn?: boolean
+        user?: CurrentUser
+      }
+      message?: string
+    }>('/api/auth/me', {
+      credentials: 'include'
+    })
+
+    currentUser.value = res.data?.loggedIn ? res.data.user || null : null
+  } catch {
+    currentUser.value = null
+  }
+}
 
 const loadDepartments = async () => {
   loadingDepartments.value = true
@@ -156,9 +226,10 @@ const runCurrentAgent = async () => {
 
   try {
     const res = await runAgencyAgent(selectedAgent.value.id, currentMessage, history, currentFiles)
+    const content = normalizeChatContent(res.content)
     chat.value.push({
       role: 'assistant',
-      content: res.content || '',
+      content: content || 'Agent 未返回内容',
       attachments: res.attachments || []
     })
   } catch (e: any) {
@@ -207,6 +278,7 @@ onMounted(async () => {
     workbenchMenuCollapsed.value = localStorage.getItem(workbenchMenuStorageKey) === '1'
     agentListCollapsed.value = localStorage.getItem(agentListStorageKey) === '1'
   }
+  await loadCurrentUser()
   await loadDepartments()
   await loadAgents()
 })
@@ -467,77 +539,123 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div class="min-h-0 flex-1 overflow-y-auto px-6 py-6">
+        <div class="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
           <div v-if="errorMsg" class="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
             {{ errorMsg }}
           </div>
 
-          <div v-if="!chat.length" class="h-full min-h-[320px] rounded-lg border border-dashed border-slate-300 bg-white/50 flex items-center justify-center text-slate-500">
+          <div v-if="!chat.length" class="h-full min-h-[320px] rounded-lg border border-dashed border-slate-300 bg-white/60 flex items-center justify-center text-slate-500">
             <div class="text-center">
               <p class="text-sm font-medium">交给「{{ selectedAgent?.name || 'Agent' }}」处理</p>
               <p class="mt-1 text-xs text-slate-400">本页会保留当前对话上下文</p>
             </div>
           </div>
 
-          <div v-else class="space-y-4 max-w-5xl">
+          <div v-else class="mx-auto flex w-full max-w-6xl flex-col gap-5">
             <article
               v-for="(item, index) in chat"
               :key="index"
-              class="rounded-lg border shadow-sm"
+              class="flex w-full items-start"
               :class="item.role === 'user'
-                ? 'border-slate-200 bg-white'
-                : 'border-teal-100 bg-[#fffffb]'"
+                ? 'justify-end'
+                : 'justify-start'"
             >
-              <div class="border-b border-slate-100 px-4 py-3 flex items-center justify-between">
-                <span class="text-sm font-bold text-slate-800">
-                  {{ item.role === 'user' ? '你' : selectedAgent?.name || 'Agent' }}
-                </span>
-                <span v-if="item.role === 'assistant' && index === chat.length - 1 && !running" class="text-xs text-slate-400">
-                  运行完成
-                </span>
+              <div
+                v-if="item.role === 'assistant'"
+                class="mr-3 mt-5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-teal-100 bg-white text-lg leading-none shadow-sm"
+                :title="selectedAgent?.name || 'Agent'"
+              >
+                {{ selectedAgent?.emoji || '◆' }}
               </div>
-              <div class="px-4 py-4">
-                <p class="whitespace-pre-wrap text-sm leading-7 text-slate-800">{{ item.content }}</p>
-                <div v-if="item.attachments?.length" class="mt-4 flex flex-wrap gap-2">
+              <div
+                class="flex min-w-0 max-w-[88%] flex-col sm:max-w-[76%] xl:max-w-[68%]"
+                :class="item.role === 'user' ? 'items-end' : 'items-start'"
+              >
+                <div
+                  class="mb-1.5 flex items-center gap-2 px-1 text-xs"
+                  :class="item.role === 'user' ? 'justify-end text-right' : 'justify-start text-left'"
+                >
                   <span
-                    v-for="attachment in item.attachments"
-                    :key="attachment.fileName + attachment.status"
-                    class="rounded-full border px-2.5 py-1 text-xs"
-                    :class="getAttachmentStatusClass(attachment.status)"
+                    class="font-semibold"
+                    :class="item.role === 'user' ? 'text-[#8f4d3a]' : 'text-teal-700'"
                   >
-                    {{ attachment.fileName }} · {{ attachment.message }}
+                    {{ item.role === 'user' ? currentUserChatTitle : selectedAgent?.name || 'Agent' }}
                   </span>
+                  <span
+                    v-if="item.role === 'assistant' && index === chat.length - 1 && !running"
+                    class="inline-flex items-center gap-1 rounded-full bg-teal-50 px-2 py-0.5 text-[11px] font-medium text-teal-700 ring-1 ring-teal-100"
+                  >
+                    运行完成
+                  </span>
+                </div>
+                <div
+                  class="rounded-lg border px-4 py-3 shadow-sm"
+                  :class="item.role === 'user'
+                    ? 'rounded-tr-sm border-[#e8c9bb] bg-[#fff7f3] shadow-[#d98b73]/10'
+                    : 'rounded-tl-sm border-teal-100 bg-white shadow-slate-200/70'"
+                >
+                  <div
+                    v-if="item.role === 'assistant'"
+                    class="chat-markdown text-sm leading-7 text-slate-800"
+                    v-html="renderAssistantMarkdown(item)"
+                  ></div>
+                  <p v-else class="whitespace-pre-wrap break-words text-sm leading-7 text-slate-800">{{ getChatDisplayContent(item) }}</p>
+                  <div v-if="item.attachments?.length" class="mt-4 flex flex-wrap gap-2">
+                    <span
+                      v-for="attachment in item.attachments"
+                      :key="attachment.fileName + attachment.status"
+                      class="rounded-full border px-2.5 py-1 text-xs"
+                      :class="getAttachmentStatusClass(attachment.status)"
+                    >
+                      {{ attachment.fileName }} · {{ attachment.message }}
+                    </span>
+                  </div>
                 </div>
               </div>
             </article>
-            <div v-if="running" class="rounded-lg border border-teal-100 bg-white px-4 py-3 text-sm text-teal-700">
-              {{ selectedAgent?.name }} 正在处理...
+            <div v-if="running" class="flex justify-start">
+              <div
+                class="mr-3 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-teal-100 bg-white text-lg leading-none shadow-sm"
+                :title="selectedAgent?.name || 'Agent'"
+              >
+                {{ selectedAgent?.emoji || '◆' }}
+              </div>
+              <div class="max-w-[88%] rounded-lg rounded-tl-sm border border-teal-100 bg-white px-4 py-3 text-sm font-medium text-teal-700 shadow-sm sm:max-w-[76%] xl:max-w-[68%]">
+                {{ selectedAgent?.name }} 正在处理...
+              </div>
             </div>
           </div>
         </div>
 
-        <div class="border-t border-slate-200 bg-[#fbfaf6] px-6 py-5">
-          <div class="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+        <div class="border-t border-slate-200 bg-[#fbfaf6] px-4 py-4 sm:px-6">
+          <div class="mx-auto max-w-6xl rounded-lg border border-slate-200 bg-white shadow-[0_14px_40px_rgba(15,23,42,0.08)] transition focus-within:border-[#d98b73] focus-within:ring-4 focus-within:ring-[#d98b73]/10">
             <textarea
               v-model="message"
-              rows="4"
-              class="block w-full resize-none border-0 bg-transparent p-2 text-sm leading-6 text-slate-900 outline-none placeholder:text-slate-400"
+              rows="3"
+              class="block min-h-[96px] w-full resize-none border-0 bg-transparent px-4 py-3 text-sm leading-6 text-slate-900 outline-none placeholder:text-slate-400"
               :placeholder="selectedAgent ? `交给「${selectedAgent.name}」处理` : '请选择一个 Agent'"
             />
 
-            <div v-if="selectedFiles.length" class="flex flex-wrap gap-2 border-t border-slate-100 px-2 py-3">
+            <div v-if="selectedFiles.length" class="flex flex-wrap gap-2 border-t border-slate-100 px-3 py-3">
               <span
                 v-for="(file, index) in selectedFiles"
                 :key="file.name + index"
-                class="inline-flex max-w-full items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-700"
+                class="inline-flex max-w-full items-center gap-2 rounded-full border border-slate-200 bg-slate-50 py-1 pl-3 pr-2 text-xs text-slate-700"
               >
                 <span class="truncate">{{ file.name }}</span>
-                <button type="button" class="text-slate-400 hover:text-rose-600" @click="removeFile(index)">×</button>
+                <button
+                  type="button"
+                  class="inline-flex h-5 w-5 items-center justify-center rounded-full text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
+                  title="移除附件"
+                  @click="removeFile(index)"
+                >
+                  ×
+                </button>
               </span>
             </div>
 
-            <div class="flex items-center justify-between gap-3 border-t border-slate-100 px-2 pt-3">
-              <div class="flex items-center gap-2">
+            <div class="flex flex-col gap-3 border-t border-slate-100 px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div class="flex min-w-0 flex-wrap items-center gap-2">
                 <input
                   ref="fileInput"
                   type="file"
@@ -548,7 +666,7 @@ onUnmounted(() => {
                 />
                 <button
                   type="button"
-                  class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 text-slate-600 transition hover:bg-slate-50"
+                  class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900"
                   title="添加附件"
                   @click="fileInput?.click()"
                 >
@@ -556,11 +674,13 @@ onUnmounted(() => {
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16.5 6.5l-7.78 7.78a3 3 0 104.24 4.24l8.49-8.49a5 5 0 00-7.07-7.07L5.64 11.7a7 7 0 109.9 9.9l6.36-6.36" />
                   </svg>
                 </button>
-                <span class="text-xs text-slate-400">{{ selectedFiles.length ? `${selectedFiles.length} 个附件` : runStatusText }}</span>
+                <span class="inline-flex min-h-9 items-center rounded-full bg-slate-50 px-3 text-xs font-medium text-slate-500 ring-1 ring-slate-100">
+                  {{ selectedFiles.length ? `${selectedFiles.length} 个附件` : runStatusText }}
+                </span>
               </div>
               <button
                 type="button"
-                class="inline-flex items-center gap-2 rounded-lg bg-[#d98b73] px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-[#c87861] disabled:cursor-not-allowed disabled:opacity-50"
+                class="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-[#c87861] px-5 text-sm font-bold text-white shadow-sm transition hover:bg-[#b86650] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 sm:w-auto"
                 :disabled="!canRun"
                 @click="runCurrentAgent"
               >
@@ -609,6 +729,147 @@ onUnmounted(() => {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+.chat-markdown {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.chat-markdown :deep(p) {
+  margin: 0 0 0.75rem;
+}
+
+.chat-markdown :deep(p:last-child),
+.chat-markdown :deep(ul:last-child),
+.chat-markdown :deep(ol:last-child),
+.chat-markdown :deep(pre:last-child),
+.chat-markdown :deep(blockquote:last-child),
+.chat-markdown :deep(table:last-child) {
+  margin-bottom: 0;
+}
+
+.chat-markdown :deep(h1),
+.chat-markdown :deep(h2),
+.chat-markdown :deep(h3),
+.chat-markdown :deep(h4) {
+  margin: 0.9rem 0 0.45rem;
+  color: #0f172a;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.chat-markdown :deep(h1:first-child),
+.chat-markdown :deep(h2:first-child),
+.chat-markdown :deep(h3:first-child),
+.chat-markdown :deep(h4:first-child) {
+  margin-top: 0;
+}
+
+.chat-markdown :deep(h1) {
+  font-size: 1.25rem;
+}
+
+.chat-markdown :deep(h2) {
+  font-size: 1.125rem;
+}
+
+.chat-markdown :deep(h3) {
+  font-size: 1rem;
+}
+
+.chat-markdown :deep(h4) {
+  font-size: 0.95rem;
+}
+
+.chat-markdown :deep(ul),
+.chat-markdown :deep(ol) {
+  margin: 0.45rem 0 0.75rem;
+  padding-left: 1.35rem;
+}
+
+.chat-markdown :deep(ul) {
+  list-style: disc;
+}
+
+.chat-markdown :deep(ol) {
+  list-style: decimal;
+}
+
+.chat-markdown :deep(li) {
+  margin: 0.2rem 0;
+  padding-left: 0.1rem;
+}
+
+.chat-markdown :deep(blockquote) {
+  margin: 0.75rem 0;
+  border-left: 3px solid #99f6e4;
+  background: #f0fdfa;
+  padding: 0.6rem 0.85rem;
+  color: #334155;
+}
+
+.chat-markdown :deep(code) {
+  border-radius: 0.35rem;
+  background: #f1f5f9;
+  padding: 0.1rem 0.35rem;
+  color: #9f1239;
+  font-size: 0.88em;
+}
+
+.chat-markdown :deep(pre) {
+  margin: 0.75rem 0;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  background: #0f172a;
+  padding: 0.85rem 1rem;
+  color: #e2e8f0;
+  line-height: 1.65;
+}
+
+.chat-markdown :deep(pre code) {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  white-space: pre;
+}
+
+.chat-markdown :deep(a) {
+  color: #0f766e;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.chat-markdown :deep(table) {
+  display: block;
+  max-width: 100%;
+  margin: 0.75rem 0;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.92em;
+}
+
+.chat-markdown :deep(th),
+.chat-markdown :deep(td) {
+  border: 1px solid #cbd5e1;
+  padding: 0.45rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.chat-markdown :deep(th) {
+  background: #f8fafc;
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.chat-markdown :deep(hr) {
+  margin: 1rem 0;
+  border: 0;
+  border-top: 1px solid #e2e8f0;
 }
 
 @media (min-width: 1280px) {
