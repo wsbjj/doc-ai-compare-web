@@ -332,7 +332,11 @@ const runCurrentAgent = async () => {
             entry.content += '\n\n'
           }
         }
-        if (event.routeStatus === 'NEEDS_CLARIFICATION' || event.routeStatus === 'WORKBENCH_HELP') {
+        if (
+          event.routeStatus === 'NEEDS_CLARIFICATION'
+          || event.routeStatus === 'WORKBENCH_HELP'
+          || event.routeStatus === 'DIRECT_REPLY'
+        ) {
           shouldRestoreCurrentFiles = true
           entry.pending = false
         }

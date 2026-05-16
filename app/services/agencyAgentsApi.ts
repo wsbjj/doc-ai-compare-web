@@ -63,7 +63,7 @@ export interface AgencyAgentChatStreamEvent {
   content?: string
   attachments?: AgencyAgentAttachment[]
   message?: string
-  routeStatus?: 'MATCHED' | 'NEEDS_CLARIFICATION' | 'WORKBENCH_HELP' | 'FAILED' | string
+  routeStatus?: 'MATCHED' | 'NEEDS_CLARIFICATION' | 'WORKBENCH_HELP' | 'DIRECT_REPLY' | 'FAILED' | string
   confidence?: number
   reason?: string
   clarificationQuestion?: string
