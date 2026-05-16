@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import MarkdownIt from 'markdown-it'
 import {
+  fetchAgencyAgentChatSessionDetail,
+  fetchAgencyAgentChatSessions,
   fetchAgencyAgentDepartments,
   fetchAgencyAgentDetail,
   fetchAgencyAgents,
@@ -8,6 +10,8 @@ import {
   runAgencyAgentStream,
   type AgencyAgentAttachment,
   type AgencyAgentChatMessage,
+  type AgencyAgentChatSession,
+  type AgencyAgentChatTurn,
   type AgencyAgentChatStreamEvent,
   type AgencyAgentDepartment,
   type AgencyAgentDetail,
@@ -21,10 +25,14 @@ type ChatEntry = {
   attachments?: AgencyAgentAttachment[]
   agentId?: string
   agentName?: string
+  departmentName?: string
   agentEmoji?: string
+  routeMode?: 'manual' | 'auto'
   routeReason?: string
   routeStatus?: string
   routeCandidates?: AgencyAgentRouteCandidate[]
+  createdAt?: number
+  turnId?: number
   pending?: boolean
   failed?: boolean
 }
@@ -54,9 +62,13 @@ const keyword = ref('')
 const message = ref('')
 const selectedFiles = ref<File[]>([])
 const chat = ref<ChatEntry[]>([])
+const activeChatSessionId = ref<string | null>(null)
+const chatSessions = ref<AgencyAgentChatSession[]>([])
 const loadingDepartments = ref(false)
 const loadingAgents = ref(false)
 const loadingDetail = ref(false)
+const loadingChatSessions = ref(false)
+const loadingChatSessionDetail = ref(false)
 const running = ref(false)
 const errorMsg = ref('')
 const showMarkdown = ref(false)
@@ -69,9 +81,14 @@ const workbenchMenuCollapsed = ref(false)
 const workbenchMenuStorageKey = 'agency-agents-workbench-menu-collapsed'
 const agentListCollapsed = ref(false)
 const agentListStorageKey = 'agency-agents-agent-list-collapsed'
+const chatHistoryCollapsed = ref(false)
+const chatHistoryStorageKey = 'agency-agents-chat-history-collapsed'
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null
 let chatScrollFrame: number | null = null
+let chatTurnCounter = 0
+let chatHistoryPreferenceReady = false
+let chatSessionsRequestSeq = 0
 
 const totalAgentCount = computed(() =>
   departments.value.reduce((sum, department) => sum + (department.agentCount || 0), 0)
@@ -82,6 +99,17 @@ const activeDepartment = computed(() =>
     ? { id: 'all', name: '全部', agentCount: totalAgentCount.value }
     : departments.value.find(item => item.id === selectedDepartmentId.value)
 )
+
+const agentById = computed(() => {
+  const map = agents.value.reduce<Record<string, AgencyAgentSummary>>((map, agent) => {
+    map[agent.id] = agent
+    return map
+  }, {})
+  if (selectedAgent.value) {
+    map[selectedAgent.value.id] = selectedAgent.value
+  }
+  return map
+})
 
 const currentUserNumber = computed(() =>
   currentUser.value?.studentNo?.trim() || currentUser.value?.id?.trim() || ''
@@ -123,6 +151,8 @@ const chatHistoryForBackend = computed<AgencyAgentChatMessage[]>(() =>
     .map(item => ({ role: item.role, content: item.content }))
 )
 
+const chatSessionCount = computed(() => chatSessions.value.length)
+
 const normalizeChatContent = (content?: string | null) =>
   (content || '')
     .replace(/\r\n/g, '\n')
@@ -137,11 +167,90 @@ const getChatDisplayContent = (item: ChatEntry) => {
 
 const renderAssistantMarkdown = (item: ChatEntry) => assistantMarkdown.render(getChatDisplayContent(item))
 
-const getEntryAgentName = (item: ChatEntry) =>
-  item.agentName || selectedAgent.value?.name || 'Agent'
+const isAutoRouteMode = (routeMode?: string | null) => (routeMode || '').toUpperCase() === 'AUTO'
 
-const getEntryAgentEmoji = (item: ChatEntry) =>
-  item.agentEmoji || selectedAgent.value?.emoji || '◆'
+const getEntryAgentName = (item: ChatEntry) => {
+  if (item.routeMode === 'auto') return '自动路由模式'
+  return item.agentName || 'Agent'
+}
+
+const getEntryAgentEmoji = (item: ChatEntry) => {
+  if (item.routeMode === 'auto') return '◇'
+  return item.agentEmoji || '◆'
+}
+
+const getHistoryPreview = (content?: string | null, fallback = '暂无内容') => {
+  const normalized = normalizeChatContent(content)
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!normalized) return fallback
+  return normalized.length > 88 ? `${normalized.slice(0, 88)}...` : normalized
+}
+
+const getSessionDisplayName = (session: AgencyAgentChatSession) => {
+  if (isAutoRouteMode(session.routeMode)) return '自动路由模式'
+  return session.displayName || 'Agent'
+}
+
+const getSessionStatusLabel = (status?: string | null) => {
+  if (status === 'FAILED') return '运行失败'
+  if (status === 'RUNNING') return '运行中'
+  return '运行完成'
+}
+
+const getSessionStatusClass = (status?: string | null) => {
+  if (status === 'FAILED') return 'border-rose-200 bg-rose-50 text-rose-700'
+  if (status === 'RUNNING') return 'border-amber-200 bg-amber-50 text-amber-700'
+  return 'border-teal-200 bg-teal-50 text-teal-700'
+}
+
+const formatSessionTime = (value?: string | null) => {
+  if (!value) return ''
+  const time = new Date(value)
+  if (Number.isNaN(time.getTime())) return ''
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(time)
+}
+
+const getTurnUserContent = (turn: AgencyAgentChatTurn) => {
+  const content = normalizeChatContent(turn.userMessage)
+  if (content) return content
+  const attachmentNames = (turn.attachments || [])
+    .map(attachment => attachment.fileName)
+    .filter(Boolean)
+  return attachmentNames.length ? attachmentNames.join('\n') : '仅上传了附件'
+}
+
+const getTurnManualAgent = (turn: AgencyAgentChatTurn) =>
+  turn.manualAgentId ? agentById.value[turn.manualAgentId] : undefined
+
+const getTurnAgentName = (turn: AgencyAgentChatTurn) => {
+  if (isAutoRouteMode(turn.routeMode)) return '自动路由模式'
+  return turn.manualAgentName || turn.displayName || getTurnManualAgent(turn)?.name || 'Agent'
+}
+
+const getTurnDepartmentName = (turn: AgencyAgentChatTurn) => {
+  if (isAutoRouteMode(turn.routeMode)) return undefined
+  return turn.manualDepartmentName || getTurnManualAgent(turn)?.departmentName
+}
+
+const getTurnAgentEmoji = (turn: AgencyAgentChatTurn) => {
+  if (isAutoRouteMode(turn.routeMode)) return '◇'
+  return getTurnManualAgent(turn)?.emoji || '◆'
+}
+
+const findSessionPrimaryAgentId = (turns: AgencyAgentChatTurn[], displayName?: string | null) => {
+  const firstManualTurn = turns.find(turn => !isAutoRouteMode(turn.routeMode) && turn.manualAgentId)
+  if (firstManualTurn?.manualAgentId) return firstManualTurn.manualAgentId
+
+  const name = displayName?.trim()
+  if (!name) return null
+  return agents.value.find(agent => agent.name === name)?.id || null
+}
 
 const currentInputPlaceholder = computed(() => {
   if (autoRouteEnabled.value) return '描述任务，系统会自动匹配 Agent'
@@ -235,15 +344,107 @@ const loadAgentDetail = async (id: string) => {
   }
 }
 
+const loadChatSessions = async (silent = false) => {
+  if (!currentUser.value) {
+    chatSessions.value = []
+    return
+  }
+
+  const requestSeq = ++chatSessionsRequestSeq
+  if (!silent) loadingChatSessions.value = true
+  try {
+    const sessions = await fetchAgencyAgentChatSessions(50)
+    if (requestSeq === chatSessionsRequestSeq) {
+      chatSessions.value = sessions
+    }
+  } catch (e: any) {
+    if (!/请先登录/.test(e?.message || '')) {
+      errorMsg.value = e?.message || '聊天记录加载失败'
+    }
+  } finally {
+    if (!silent) loadingChatSessions.value = false
+  }
+}
+
+const openChatSession = async (sessionId: string) => {
+  if (running.value || loadingChatSessionDetail.value) return
+  loadingChatSessionDetail.value = true
+  errorMsg.value = ''
+
+  try {
+    const detail = await fetchAgencyAgentChatSessionDetail(sessionId)
+    const turns = detail.turns || []
+    const sessionIsAutoRoute = isAutoRouteMode(detail.session.routeMode)
+    activeChatSessionId.value = detail.session.id
+    autoRouteEnabled.value = sessionIsAutoRoute
+    lastAutoRouteAgentId.value = null
+
+    if (!sessionIsAutoRoute) {
+      const primaryAgentId = findSessionPrimaryAgentId(turns, detail.session.displayName)
+      if (primaryAgentId) {
+        await selectAgent(primaryAgentId, true)
+      }
+    }
+
+    const restoredChat: ChatEntry[] = []
+    let maxTurnIndex = 0
+    for (const turn of turns) {
+      const turnIndex = turn.turnIndex || restoredChat.length + 1
+      maxTurnIndex = Math.max(maxTurnIndex, turnIndex)
+      const createdAt = turn.createTime ? new Date(turn.createTime).getTime() : Date.now()
+      const routeMode = isAutoRouteMode(turn.routeMode) ? 'auto' : 'manual'
+      const failed = turn.status === 'FAILED'
+      const pending = turn.status === 'RUNNING'
+      const assistantContent = normalizeChatContent(turn.assistantMessage)
+      const errorContent = failed && turn.errorMessage ? `运行失败：${turn.errorMessage}` : ''
+
+      restoredChat.push({
+        role: 'user',
+        content: getTurnUserContent(turn),
+        createdAt,
+        turnId: turnIndex
+      })
+      restoredChat.push({
+        role: 'assistant',
+        content: assistantContent || errorContent,
+        attachments: turn.attachments || [],
+        agentId: routeMode === 'auto' ? undefined : turn.manualAgentId,
+        agentName: getTurnAgentName(turn),
+        departmentName: getTurnDepartmentName(turn),
+        agentEmoji: getTurnAgentEmoji(turn),
+        routeMode,
+        createdAt,
+        turnId: turnIndex,
+        pending,
+        failed
+      })
+    }
+
+    chat.value = restoredChat
+    chatTurnCounter = maxTurnIndex
+    await nextTick()
+    void scrollChatToLatest('auto')
+  } catch (e: any) {
+    errorMsg.value = e?.message || '聊天记录恢复失败'
+  } finally {
+    loadingChatSessionDetail.value = false
+  }
+}
+
 const selectDepartment = (id: string) => {
   selectedDepartmentId.value = id
 }
 
-const selectAgent = async (id: string, keepChat = false) => {
+const selectAgent = async (id: string, keepChat = true) => {
   if (selectedAgentId.value === id && selectedAgent.value) return
   selectedAgentId.value = id
   errorMsg.value = ''
-  if (!keepChat) chat.value = []
+  if (!keepChat) {
+    chat.value = []
+    activeChatSessionId.value = null
+    lastAutoRouteAgentId.value = null
+    chatTurnCounter = 0
+  }
   await loadAgentDetail(id)
 }
 
@@ -260,8 +461,10 @@ const removeFile = (index: number) => {
 
 const clearChat = () => {
   chat.value = []
+  activeChatSessionId.value = null
   errorMsg.value = ''
   lastAutoRouteAgentId.value = null
+  chatTurnCounter = 0
 }
 
 const runCurrentAgent = async () => {
@@ -274,6 +477,7 @@ const runCurrentAgent = async () => {
   const history = [...chatHistoryForBackend.value]
   let autoRouteMatched = false
   let shouldRestoreCurrentFiles = false
+  let refreshedRunningSession = false
 
   const restoreCurrentFiles = () => {
     if (autoRouteEnabled.value && currentFiles.length && shouldRestoreCurrentFiles && !selectedFiles.value.length) {
@@ -283,9 +487,13 @@ const runCurrentAgent = async () => {
 
   running.value = true
   errorMsg.value = ''
+  const createdAt = Date.now()
+  const turnId = ++chatTurnCounter
   chat.value.push({
     role: 'user',
-    content: currentMessage || currentFiles.map(file => file.name).join('\n')
+    content: currentMessage || currentFiles.map(file => file.name).join('\n'),
+    createdAt,
+    turnId
   })
   message.value = ''
   selectedFiles.value = []
@@ -296,8 +504,12 @@ const runCurrentAgent = async () => {
     content: '',
     attachments: [],
     agentId: autoRouteEnabled.value ? undefined : manualAgent?.id,
-    agentName: autoRouteEnabled.value ? '自动路由' : manualAgent?.name,
+    agentName: autoRouteEnabled.value ? '自动路由模式' : manualAgent?.name,
+    departmentName: autoRouteEnabled.value ? undefined : manualAgent?.departmentName,
     agentEmoji: autoRouteEnabled.value ? '◇' : manualAgent?.emoji,
+    routeMode: autoRouteEnabled.value ? 'auto' : 'manual',
+    createdAt,
+    turnId,
     pending: true
   }) - 1
   const updateAssistant = (update: (entry: ChatEntry) => void) => {
@@ -311,9 +523,17 @@ const runCurrentAgent = async () => {
   void scrollChatToLatest()
 
   const applyStreamEvent = (event: AgencyAgentChatStreamEvent) => {
+    if (event.sessionId) {
+      activeChatSessionId.value = event.sessionId
+      if (!refreshedRunningSession) {
+        refreshedRunningSession = true
+        void loadChatSessions(true)
+      }
+    }
     updateAssistant(entry => {
       if (event.agentId) entry.agentId = event.agentId
       if (event.agentName) entry.agentName = event.agentName
+      if (event.departmentName) entry.departmentName = event.departmentName
       if (event.emoji) entry.agentEmoji = event.emoji
 
       if (event.type === 'ROUTE') {
@@ -380,10 +600,18 @@ const runCurrentAgent = async () => {
         history,
         currentFiles,
         lastAutoRouteAgentId.value,
+        activeChatSessionId.value,
         applyStreamEvent
       )
     } else if (manualAgent) {
-      await runAgencyAgentStream(manualAgent.id, currentMessage, history, currentFiles, applyStreamEvent)
+      await runAgencyAgentStream(
+        manualAgent.id,
+        currentMessage,
+        history,
+        currentFiles,
+        activeChatSessionId.value,
+        applyStreamEvent
+      )
     }
     updateAssistant(entry => {
       entry.pending = false
@@ -409,6 +637,7 @@ const runCurrentAgent = async () => {
     updateAssistant(entry => {
       entry.pending = false
     })
+    await loadChatSessions(true)
   }
 }
 
@@ -442,6 +671,12 @@ watch(agentListCollapsed, value => {
   }
 })
 
+watch(chatHistoryCollapsed, value => {
+  if (process.client && chatHistoryPreferenceReady) {
+    localStorage.setItem(chatHistoryStorageKey, value ? '1' : '0')
+  }
+})
+
 watch(autoRouteEnabled, value => {
   if (process.client) {
     localStorage.setItem(autoRouteStorageKey, value ? '1' : '0')
@@ -453,10 +688,18 @@ onMounted(async () => {
     autoRouteEnabled.value = localStorage.getItem(autoRouteStorageKey) === '1'
     workbenchMenuCollapsed.value = localStorage.getItem(workbenchMenuStorageKey) === '1'
     agentListCollapsed.value = localStorage.getItem(agentListStorageKey) === '1'
+    const storedHistoryState = localStorage.getItem(chatHistoryStorageKey)
+    chatHistoryCollapsed.value = storedHistoryState == null
+      ? window.innerWidth < 1280
+      : storedHistoryState === '1'
+    void nextTick(() => {
+      chatHistoryPreferenceReady = true
+    })
   }
   await loadCurrentUser()
   await loadDepartments()
   await loadAgents()
+  await loadChatSessions()
 })
 
 onUnmounted(() => {
@@ -474,7 +717,8 @@ onUnmounted(() => {
       :class="{
         'auto-route': autoRouteEnabled,
         'menu-collapsed': workbenchMenuCollapsed,
-        'agent-list-collapsed': agentListCollapsed
+        'agent-list-collapsed': agentListCollapsed,
+        'chat-history-collapsed': chatHistoryCollapsed
       }"
     >
       <aside
@@ -915,6 +1159,118 @@ onUnmounted(() => {
           </div>
         </div>
       </main>
+
+      <aside
+        class="chat-history-panel min-h-0 border-l border-slate-200 bg-[#fbfaf6] shadow-[0_0_30px_rgba(15,23,42,0.06)] transition-transform duration-200"
+        :class="chatHistoryCollapsed ? 'chat-history-panel-collapsed' : 'chat-history-panel-open'"
+      >
+        <div
+          v-if="chatHistoryCollapsed"
+          class="flex h-full min-h-0 flex-col items-center gap-4 px-2 py-4"
+        >
+          <button
+            type="button"
+            class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:bg-slate-50 hover:text-slate-950"
+            title="展开聊天记录"
+            @click="chatHistoryCollapsed = false"
+          >
+            <svg class="h-5 w-5 rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+          <div class="flex flex-1 flex-col items-center justify-center gap-3 text-slate-500">
+            <span class="history-rail-label text-xs font-semibold tracking-widest">聊天记录</span>
+            <span class="rounded-full bg-white px-2 py-1 text-xs font-bold text-teal-700 ring-1 ring-teal-100">
+              {{ chatSessionCount }}
+            </span>
+          </div>
+        </div>
+
+        <div v-else class="flex h-full min-h-0 flex-col">
+          <header class="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-4">
+            <div class="min-w-0">
+              <p class="text-xs font-medium text-slate-500">我的 Agent 工作台会话</p>
+              <h3 class="mt-0.5 truncate text-base font-bold text-slate-950">聊天记录</h3>
+            </div>
+            <div class="flex shrink-0 items-center gap-2">
+              <span class="rounded-full bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-700 ring-1 ring-teal-100">
+                {{ chatSessionCount }} 条
+              </span>
+              <button
+                type="button"
+                class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-950"
+                title="折叠聊天记录"
+                @click="chatHistoryCollapsed = true"
+              >
+                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            </div>
+          </header>
+
+          <div class="min-h-0 flex-1 overflow-y-auto p-3">
+            <div
+              v-if="loadingChatSessions"
+              class="flex h-full min-h-[240px] items-center justify-center rounded-lg border border-slate-200 bg-white/70 px-5 text-center"
+            >
+              <div>
+                <p class="text-sm font-semibold text-slate-700">正在加载聊天记录</p>
+                <p class="mt-1 text-xs leading-5 text-slate-500">稍等一下，正在读取你的工作台会话。</p>
+              </div>
+            </div>
+
+            <div
+              v-else-if="!chatSessions.length"
+              class="flex h-full min-h-[240px] items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white/70 px-5 text-center"
+            >
+              <div>
+                <p class="text-sm font-semibold text-slate-700">暂无聊天记录</p>
+                <p class="mt-1 text-xs leading-5 text-slate-500">运行 Agent 后，这里会保存你的工作台会话。</p>
+              </div>
+            </div>
+
+            <ol v-else class="space-y-3">
+              <li
+                v-for="session in chatSessions"
+                :key="session.id"
+              >
+                <button
+                  type="button"
+                  class="w-full rounded-lg border bg-white p-3 text-left shadow-sm transition hover:border-slate-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
+                  :class="activeChatSessionId === session.id
+                    ? 'border-teal-300 ring-2 ring-teal-100'
+                    : 'border-slate-200'"
+                  :disabled="running || loadingChatSessionDetail"
+                  @click="openChatSession(session.id)"
+                >
+                  <div class="flex items-start justify-between gap-2">
+                    <div class="min-w-0">
+                      <p class="truncate text-sm font-bold text-slate-950" :title="getSessionDisplayName(session)">
+                        {{ getSessionDisplayName(session) }}
+                      </p>
+                      <p class="mt-0.5 truncate text-[11px] font-medium text-slate-400" :title="session.title">
+                        {{ session.title || 'Agent 工作台会话' }}
+                      </p>
+                    </div>
+                    <span :class="['shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold', getSessionStatusClass(session.status)]">
+                      {{ getSessionStatusLabel(session.status) }}
+                    </span>
+                  </div>
+
+                  <p class="mt-3 line-clamp-3 text-xs leading-5 text-slate-700">
+                    {{ getHistoryPreview(session.summary, '暂无摘要') }}
+                  </p>
+                  <div class="mt-3 flex items-center justify-between gap-2 text-[11px] font-medium text-slate-400">
+                    <span>{{ session.turnCount || 0 }} 轮</span>
+                    <span>{{ formatSessionTime(session.updateTime || session.createTime) }}</span>
+                  </div>
+                </button>
+              </li>
+            </ol>
+          </div>
+        </div>
+      </aside>
     </div>
 
     <div
@@ -951,6 +1307,23 @@ onUnmounted(() => {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+.line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.chat-history-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.history-rail-label {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
 }
 
 .chat-markdown {
@@ -1096,26 +1469,57 @@ onUnmounted(() => {
 
 @media (min-width: 1280px) {
   .workbench-grid {
-    grid-template-columns: 15rem 24rem minmax(0, 1fr);
+    --history-width: 21rem;
+    grid-template-columns: 15rem 24rem minmax(0, 1fr) var(--history-width);
+  }
+
+  .workbench-grid.chat-history-collapsed {
+    --history-width: 4rem;
   }
 
   .workbench-grid.menu-collapsed {
-    grid-template-columns: 24rem minmax(0, 1fr);
+    grid-template-columns: 24rem minmax(0, 1fr) var(--history-width);
   }
 
   .workbench-grid.agent-list-collapsed {
-    grid-template-columns: 15rem minmax(0, 1fr);
+    grid-template-columns: 15rem minmax(0, 1fr) var(--history-width);
   }
 
   .workbench-grid.menu-collapsed.agent-list-collapsed {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) var(--history-width);
   }
 
   .workbench-grid.auto-route,
   .workbench-grid.auto-route.menu-collapsed,
   .workbench-grid.auto-route.agent-list-collapsed,
   .workbench-grid.auto-route.menu-collapsed.agent-list-collapsed {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) var(--history-width);
+  }
+
+  .chat-history-panel {
+    position: relative;
+    inset: auto;
+    width: auto;
+    transform: none !important;
+  }
+}
+
+@media (max-width: 1279px) {
+  .chat-history-panel {
+    position: fixed;
+    top: 4rem;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    width: min(22rem, calc(100vw - 1rem));
+  }
+
+  .chat-history-panel-collapsed {
+    transform: translateX(calc(100% - 3.75rem));
+  }
+
+  .chat-history-panel-open {
+    transform: translateX(0);
   }
 }
 </style>

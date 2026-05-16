@@ -39,10 +39,46 @@ export interface AgencyAgentChatMessage {
 }
 
 export interface AgencyAgentChatResponse {
+  sessionId?: string
   agentId: string
   agentName: string
   content: string
   attachments: AgencyAgentAttachment[]
+}
+
+export interface AgencyAgentChatSession {
+  id: string
+  title: string
+  routeMode: 'MANUAL' | 'AUTO' | string
+  displayName: string
+  status: 'RUNNING' | 'DONE' | 'FAILED' | string
+  summary?: string
+  turnCount?: number
+  createTime?: string
+  updateTime?: string
+}
+
+export interface AgencyAgentChatTurn {
+  id: string
+  sessionId: string
+  turnIndex: number
+  routeMode: 'MANUAL' | 'AUTO' | string
+  displayName: string
+  manualAgentId?: string
+  manualAgentName?: string
+  manualDepartmentName?: string
+  userMessage?: string
+  assistantMessage?: string
+  attachments?: AgencyAgentAttachment[]
+  status: 'RUNNING' | 'DONE' | 'FAILED' | string
+  errorMessage?: string
+  createTime?: string
+  updateTime?: string
+}
+
+export interface AgencyAgentChatSessionDetail {
+  session: AgencyAgentChatSession
+  turns: AgencyAgentChatTurn[]
 }
 
 export interface AgencyAgentRouteCandidate {
@@ -55,6 +91,7 @@ export interface AgencyAgentRouteCandidate {
 }
 
 export interface AgencyAgentChatStreamEvent {
+  sessionId?: string
   type: 'META' | 'DELTA' | 'DONE' | 'ERROR' | string
   agentId?: string
   agentName?: string
@@ -97,11 +134,25 @@ export const fetchAgencyAgentDetail = async (id: string): Promise<AgencyAgentDet
   })
 }
 
+export const fetchAgencyAgentChatSessions = async (limit = 50): Promise<AgencyAgentChatSession[]> => {
+  return await http<AgencyAgentChatSession[]>('/api/agency-agents/chat-sessions', {
+    method: 'GET',
+    params: { limit }
+  })
+}
+
+export const fetchAgencyAgentChatSessionDetail = async (id: string): Promise<AgencyAgentChatSessionDetail> => {
+  return await http<AgencyAgentChatSessionDetail>(`/api/agency-agents/chat-sessions/${id}`, {
+    method: 'GET'
+  })
+}
+
 export const runAgencyAgent = async (
   id: string,
   message: string,
   history: AgencyAgentChatMessage[],
-  files: File[]
+  files: File[],
+  sessionId?: string | null
 ): Promise<AgencyAgentChatResponse> => {
   const formData = new FormData()
   formData.append('message', message)
@@ -110,6 +161,9 @@ export const runAgencyAgent = async (
   }
   for (const file of files) {
     formData.append('files', file)
+  }
+  if (sessionId) {
+    formData.append('sessionId', sessionId)
   }
 
   return await http<AgencyAgentChatResponse>(`/api/agency-agents/agents/${id}/chat`, {
@@ -123,6 +177,7 @@ export const runAgencyAgentStream = async (
   message: string,
   history: AgencyAgentChatMessage[],
   files: File[],
+  sessionId: string | null | undefined,
   onEvent: (event: AgencyAgentChatStreamEvent) => void
 ): Promise<void> => {
   const formData = new FormData()
@@ -132,6 +187,9 @@ export const runAgencyAgentStream = async (
   }
   for (const file of files) {
     formData.append('files', file)
+  }
+  if (sessionId) {
+    formData.append('sessionId', sessionId)
   }
 
   const response = await fetch(`/api/agency-agents/agents/${id}/chat/stream`, {
@@ -187,6 +245,7 @@ export const runAgencyAgentAutoRouteStream = async (
   history: AgencyAgentChatMessage[],
   files: File[],
   lastAgentId: string | null | undefined,
+  sessionId: string | null | undefined,
   onEvent: (event: AgencyAgentChatStreamEvent) => void
 ): Promise<void> => {
   const formData = new FormData()
@@ -196,6 +255,9 @@ export const runAgencyAgentAutoRouteStream = async (
   }
   if (lastAgentId) {
     formData.append('lastAgentId', lastAgentId)
+  }
+  if (sessionId) {
+    formData.append('sessionId', sessionId)
   }
   for (const file of files) {
     formData.append('files', file)
