@@ -64,6 +64,12 @@ const selectedFiles = ref<File[]>([])
 const chat = ref<ChatEntry[]>([])
 const activeChatSessionId = ref<string | null>(null)
 const chatSessions = ref<AgencyAgentChatSession[]>([])
+const mentionedAgent = ref<AgencyAgentSummary | null>(null)
+const mentionQuery = ref('')
+const mentionCandidates = ref<AgencyAgentSummary[]>([])
+const showMentionSuggestions = ref(false)
+const loadingMentionAgents = ref(false)
+const mentionTriggerIndex = ref(-1)
 const loadingDepartments = ref(false)
 const loadingAgents = ref(false)
 const loadingDetail = ref(false)
@@ -73,6 +79,7 @@ const running = ref(false)
 const errorMsg = ref('')
 const showMarkdown = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
+const messageInputRef = ref<HTMLTextAreaElement | null>(null)
 const chatScrollRef = ref<HTMLElement | null>(null)
 const autoRouteEnabled = ref(false)
 const autoRouteStorageKey = 'agency-agents-auto-route-enabled'
@@ -85,6 +92,7 @@ const chatHistoryCollapsed = ref(false)
 const chatHistoryStorageKey = 'agency-agents-chat-history-collapsed'
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null
+let mentionSearchTimer: ReturnType<typeof setTimeout> | null = null
 let chatScrollFrame: number | null = null
 let chatTurnCounter = 0
 let chatHistoryPreferenceReady = false
@@ -132,7 +140,21 @@ const currentUserChatTitle = computed(() => {
   return number ? `${currentUserIdentityName.value}：${number}` : '我'
 })
 
-const hasRunnableInput = computed(() => !!message.value.trim() || selectedFiles.value.length > 0)
+const getMentionToken = (agent?: Pick<AgencyAgentSummary, 'name'> | null) =>
+  agent?.name ? `@${agent.name}` : ''
+
+const stripSelectedMention = (text: string, agent?: Pick<AgencyAgentSummary, 'name'> | null) => {
+  const token = getMentionToken(agent)
+  return token ? text.replace(token, '').trim() : text.trim()
+}
+
+const currentRunnableMessage = computed(() =>
+  autoRouteEnabled.value && mentionedAgent.value
+    ? stripSelectedMention(message.value, mentionedAgent.value)
+    : message.value.trim()
+)
+
+const hasRunnableInput = computed(() => !!currentRunnableMessage.value || selectedFiles.value.length > 0)
 
 const canRun = computed(() =>
   !running.value && hasRunnableInput.value && (autoRouteEnabled.value || !!selectedAgent.value)
@@ -170,12 +192,16 @@ const renderAssistantMarkdown = (item: ChatEntry) => assistantMarkdown.render(ge
 const isAutoRouteMode = (routeMode?: string | null) => (routeMode || '').toUpperCase() === 'AUTO'
 
 const getEntryAgentName = (item: ChatEntry) => {
-  if (item.routeMode === 'auto') return '自动路由模式'
+  if (item.routeMode === 'auto') return item.agentName && item.agentName !== '自动路由模式'
+    ? item.agentName
+    : '自动路由模式'
   return item.agentName || 'Agent'
 }
 
 const getEntryAgentEmoji = (item: ChatEntry) => {
-  if (item.routeMode === 'auto') return '◇'
+  if (item.routeMode === 'auto') return item.agentEmoji && item.agentEmoji !== '◇'
+    ? item.agentEmoji
+    : '◇'
   return item.agentEmoji || '◆'
 }
 
@@ -228,18 +254,25 @@ const getTurnUserContent = (turn: AgencyAgentChatTurn) => {
 const getTurnManualAgent = (turn: AgencyAgentChatTurn) =>
   turn.manualAgentId ? agentById.value[turn.manualAgentId] : undefined
 
+const getTurnAutoRouteAgent = (turn: AgencyAgentChatTurn) =>
+  turn.autoRouteAgentId ? agentById.value[turn.autoRouteAgentId] : undefined
+
 const getTurnAgentName = (turn: AgencyAgentChatTurn) => {
-  if (isAutoRouteMode(turn.routeMode)) return '自动路由模式'
+  if (isAutoRouteMode(turn.routeMode)) {
+    return turn.autoRouteAgentName || getTurnAutoRouteAgent(turn)?.name || '自动路由模式'
+  }
   return turn.manualAgentName || turn.displayName || getTurnManualAgent(turn)?.name || 'Agent'
 }
 
 const getTurnDepartmentName = (turn: AgencyAgentChatTurn) => {
-  if (isAutoRouteMode(turn.routeMode)) return undefined
+  if (isAutoRouteMode(turn.routeMode)) {
+    return turn.autoRouteDepartmentName || getTurnAutoRouteAgent(turn)?.departmentName
+  }
   return turn.manualDepartmentName || getTurnManualAgent(turn)?.departmentName
 }
 
 const getTurnAgentEmoji = (turn: AgencyAgentChatTurn) => {
-  if (isAutoRouteMode(turn.routeMode)) return '◇'
+  if (isAutoRouteMode(turn.routeMode)) return getTurnAutoRouteAgent(turn)?.emoji || '◇'
   return getTurnManualAgent(turn)?.emoji || '◆'
 }
 
@@ -253,7 +286,7 @@ const findSessionPrimaryAgentId = (turns: AgencyAgentChatTurn[], displayName?: s
 }
 
 const currentInputPlaceholder = computed(() => {
-  if (autoRouteEnabled.value) return '描述任务，系统会自动匹配 Agent'
+  if (autoRouteEnabled.value) return '输入 @ 指定 Agent，或直接描述任务自动匹配'
   return selectedAgent.value ? `交给「${selectedAgent.value.name}」处理` : '请选择一个 Agent'
 })
 
@@ -280,6 +313,100 @@ const scrollChatToLatest = async (behavior: ScrollBehavior = 'smooth') => {
 const toggleAutoRoute = () => {
   autoRouteEnabled.value = !autoRouteEnabled.value
   errorMsg.value = ''
+  if (!autoRouteEnabled.value) {
+    clearMentionAgent()
+  }
+}
+
+const clearMentionSuggestions = () => {
+  if (mentionSearchTimer) {
+    clearTimeout(mentionSearchTimer)
+    mentionSearchTimer = null
+  }
+  showMentionSuggestions.value = false
+  mentionQuery.value = ''
+  mentionTriggerIndex.value = -1
+  loadingMentionAgents.value = false
+}
+
+const clearMentionAgent = () => {
+  mentionedAgent.value = null
+  clearMentionSuggestions()
+}
+
+const loadMentionCandidates = async (query: string) => {
+  loadingMentionAgents.value = true
+  try {
+    const list = await fetchAgencyAgents('all', query)
+    mentionCandidates.value = list.slice(0, 8)
+  } catch (e: any) {
+    mentionCandidates.value = []
+    errorMsg.value = e?.message || 'Agent 搜索失败'
+  } finally {
+    loadingMentionAgents.value = false
+  }
+}
+
+const scheduleMentionSearch = (query: string) => {
+  if (mentionSearchTimer) clearTimeout(mentionSearchTimer)
+  loadingMentionAgents.value = true
+  mentionSearchTimer = setTimeout(() => {
+    void loadMentionCandidates(query)
+  }, 120)
+}
+
+const getActiveMention = () => {
+  const input = messageInputRef.value
+  const cursor = input?.selectionStart ?? message.value.length
+  const beforeCursor = message.value.slice(0, cursor)
+  const triggerIndex = beforeCursor.lastIndexOf('@')
+  if (triggerIndex === -1) return null
+
+  const query = beforeCursor.slice(triggerIndex + 1)
+  if (/[\s\r\n]/.test(query)) return null
+  return { triggerIndex, query, cursor }
+}
+
+const handleMessageInput = () => {
+  if (mentionedAgent.value && !message.value.includes(getMentionToken(mentionedAgent.value))) {
+    mentionedAgent.value = null
+  }
+  if (!autoRouteEnabled.value) {
+    clearMentionSuggestions()
+    return
+  }
+
+  const activeMention = getActiveMention()
+  if (!activeMention) {
+    clearMentionSuggestions()
+    return
+  }
+
+  mentionTriggerIndex.value = activeMention.triggerIndex
+  mentionQuery.value = activeMention.query
+  showMentionSuggestions.value = true
+  scheduleMentionSearch(activeMention.query)
+}
+
+const selectMentionAgent = async (agent: AgencyAgentSummary) => {
+  const input = messageInputRef.value
+  const cursor = input?.selectionStart ?? message.value.length
+  const triggerIndex = mentionTriggerIndex.value >= 0 ? mentionTriggerIndex.value : cursor
+  const mentionText = `${getMentionToken(agent)} `
+  message.value = `${message.value.slice(0, triggerIndex)}${mentionText}${message.value.slice(cursor)}`
+  mentionedAgent.value = agent
+  clearMentionSuggestions()
+
+  await nextTick()
+  const nextCursor = triggerIndex + mentionText.length
+  messageInputRef.value?.focus()
+  messageInputRef.value?.setSelectionRange(nextCursor, nextCursor)
+}
+
+const closeMentionSuggestionsSoon = () => {
+  window.setTimeout(() => {
+    showMentionSuggestions.value = false
+  }, 120)
 }
 
 const loadCurrentUser = async () => {
@@ -378,6 +505,7 @@ const openChatSession = async (sessionId: string) => {
     activeChatSessionId.value = detail.session.id
     autoRouteEnabled.value = sessionIsAutoRoute
     lastAutoRouteAgentId.value = null
+    clearMentionAgent()
 
     if (!sessionIsAutoRoute) {
       const primaryAgentId = findSessionPrimaryAgentId(turns, detail.session.displayName)
@@ -397,6 +525,9 @@ const openChatSession = async (sessionId: string) => {
       const pending = turn.status === 'RUNNING'
       const assistantContent = normalizeChatContent(turn.assistantMessage)
       const errorContent = failed && turn.errorMessage ? `运行失败：${turn.errorMessage}` : ''
+      if (routeMode === 'auto' && turn.autoRouteAgentId) {
+        lastAutoRouteAgentId.value = turn.autoRouteAgentId
+      }
 
       restoredChat.push({
         role: 'user',
@@ -408,7 +539,7 @@ const openChatSession = async (sessionId: string) => {
         role: 'assistant',
         content: assistantContent || errorContent,
         attachments: turn.attachments || [],
-        agentId: routeMode === 'auto' ? undefined : turn.manualAgentId,
+        agentId: routeMode === 'auto' ? turn.autoRouteAgentId : turn.manualAgentId,
         agentName: getTurnAgentName(turn),
         departmentName: getTurnDepartmentName(turn),
         agentEmoji: getTurnAgentEmoji(turn),
@@ -470,9 +601,12 @@ const clearChat = () => {
 const runCurrentAgent = async () => {
   if (!canRun.value) return
   const manualAgent = selectedAgent.value
+  const mentionedAgentForTurn = autoRouteEnabled.value ? mentionedAgent.value : null
   if (!autoRouteEnabled.value && !manualAgent) return
 
-  const currentMessage = message.value.trim()
+  const currentMessage = autoRouteEnabled.value && mentionedAgentForTurn
+    ? stripSelectedMention(message.value, mentionedAgentForTurn)
+    : message.value.trim()
   const currentFiles = [...selectedFiles.value]
   const history = [...chatHistoryForBackend.value]
   let autoRouteMatched = false
@@ -496,6 +630,7 @@ const runCurrentAgent = async () => {
     turnId
   })
   message.value = ''
+  clearMentionAgent()
   selectedFiles.value = []
   if (fileInput.value) fileInput.value.value = ''
 
@@ -503,10 +638,10 @@ const runCurrentAgent = async () => {
     role: 'assistant',
     content: '',
     attachments: [],
-    agentId: autoRouteEnabled.value ? undefined : manualAgent?.id,
-    agentName: autoRouteEnabled.value ? '自动路由模式' : manualAgent?.name,
-    departmentName: autoRouteEnabled.value ? undefined : manualAgent?.departmentName,
-    agentEmoji: autoRouteEnabled.value ? '◇' : manualAgent?.emoji,
+    agentId: autoRouteEnabled.value ? mentionedAgentForTurn?.id : manualAgent?.id,
+    agentName: autoRouteEnabled.value ? mentionedAgentForTurn?.name || '自动路由模式' : manualAgent?.name,
+    departmentName: autoRouteEnabled.value ? mentionedAgentForTurn?.departmentName : manualAgent?.departmentName,
+    agentEmoji: autoRouteEnabled.value ? mentionedAgentForTurn?.emoji || '◇' : manualAgent?.emoji,
     routeMode: autoRouteEnabled.value ? 'auto' : 'manual',
     createdAt,
     turnId,
@@ -600,6 +735,7 @@ const runCurrentAgent = async () => {
         history,
         currentFiles,
         lastAutoRouteAgentId.value,
+        mentionedAgentForTurn?.id,
         activeChatSessionId.value,
         applyStreamEvent
       )
@@ -704,6 +840,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (searchTimer) clearTimeout(searchTimer)
+  if (mentionSearchTimer) clearTimeout(mentionSearchTimer)
   if (process.client && chatScrollFrame !== null) {
     window.cancelAnimationFrame(chatScrollFrame)
   }
@@ -1094,13 +1231,65 @@ onUnmounted(() => {
         </div>
 
         <div class="border-t border-slate-200 bg-[#fbfaf6] px-4 py-4 sm:px-6">
-          <div class="mx-auto max-w-6xl rounded-lg border border-slate-200 bg-white shadow-[0_14px_40px_rgba(15,23,42,0.08)] transition focus-within:border-[#d98b73] focus-within:ring-4 focus-within:ring-[#d98b73]/10">
+          <div class="relative mx-auto max-w-6xl rounded-lg border border-slate-200 bg-white shadow-[0_14px_40px_rgba(15,23,42,0.08)] transition focus-within:border-[#d98b73] focus-within:ring-4 focus-within:ring-[#d98b73]/10">
             <textarea
+              ref="messageInputRef"
               v-model="message"
               rows="3"
               class="block min-h-[96px] w-full resize-none border-0 bg-transparent px-4 py-3 text-sm leading-6 text-slate-900 outline-none placeholder:text-slate-400"
               :placeholder="currentInputPlaceholder"
+              @input="handleMessageInput"
+              @click="handleMessageInput"
+              @keyup="handleMessageInput"
+              @keydown.esc="clearMentionSuggestions"
+              @blur="closeMentionSuggestionsSoon"
             />
+
+            <div
+              v-if="autoRouteEnabled && mentionedAgent"
+              class="flex flex-wrap items-center gap-2 border-t border-slate-100 px-3 py-2"
+            >
+              <span class="text-xs font-medium text-slate-500">指定 Agent</span>
+              <span class="inline-flex max-w-full items-center gap-2 rounded-full border border-teal-200 bg-teal-50 py-1 pl-2.5 pr-1.5 text-xs font-medium text-teal-700">
+                <span class="leading-none">{{ mentionedAgent.emoji || '◆' }}</span>
+                <span class="truncate">@{{ mentionedAgent.name }}</span>
+                <button
+                  type="button"
+                  class="inline-flex h-5 w-5 items-center justify-center rounded-full text-teal-500 transition hover:bg-white hover:text-teal-700"
+                  title="取消指定 Agent"
+                  @click="clearMentionAgent"
+                >
+                  ×
+                </button>
+              </span>
+            </div>
+
+            <div
+              v-if="autoRouteEnabled && showMentionSuggestions"
+              class="border-t border-slate-100 bg-[#fbfaf6] px-3 py-2"
+            >
+              <div class="mb-2 flex items-center justify-between text-xs text-slate-500">
+                <span>选择要指定的 Agent</span>
+                <span v-if="mentionQuery">@{{ mentionQuery }}</span>
+              </div>
+              <div class="max-h-56 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-sm">
+                <button
+                  v-for="agent in mentionCandidates"
+                  :key="agent.id"
+                  type="button"
+                  class="flex w-full items-start gap-3 border-b border-slate-100 px-3 py-2.5 text-left transition last:border-b-0 hover:bg-teal-50"
+                  @mousedown.prevent="selectMentionAgent(agent)"
+                >
+                  <span class="mt-0.5 text-base leading-none">{{ agent.emoji || '◆' }}</span>
+                  <span class="min-w-0 flex-1">
+                    <span class="block truncate text-sm font-semibold text-slate-900">{{ agent.name }}</span>
+                    <span class="mt-0.5 block truncate text-xs text-slate-500">{{ agent.departmentName }} · {{ agent.description }}</span>
+                  </span>
+                </button>
+                <div v-if="loadingMentionAgents" class="px-3 py-3 text-sm text-slate-500">搜索中...</div>
+                <div v-else-if="!mentionCandidates.length" class="px-3 py-3 text-sm text-slate-500">未找到匹配的 Agent</div>
+              </div>
+            </div>
 
             <div v-if="selectedFiles.length" class="flex flex-wrap gap-2 border-t border-slate-100 px-3 py-3">
               <span

@@ -67,6 +67,9 @@ export interface AgencyAgentChatTurn {
   manualAgentId?: string
   manualAgentName?: string
   manualDepartmentName?: string
+  autoRouteAgentId?: string
+  autoRouteAgentName?: string
+  autoRouteDepartmentName?: string
   userMessage?: string
   assistantMessage?: string
   attachments?: AgencyAgentAttachment[]
@@ -245,6 +248,7 @@ export const runAgencyAgentAutoRouteStream = async (
   history: AgencyAgentChatMessage[],
   files: File[],
   lastAgentId: string | null | undefined,
+  mentionedAgentId: string | null | undefined,
   sessionId: string | null | undefined,
   onEvent: (event: AgencyAgentChatStreamEvent) => void
 ): Promise<void> => {
@@ -255,6 +259,9 @@ export const runAgencyAgentAutoRouteStream = async (
   }
   if (lastAgentId) {
     formData.append('lastAgentId', lastAgentId)
+  }
+  if (mentionedAgentId) {
+    formData.append('mentionedAgentId', mentionedAgentId)
   }
   if (sessionId) {
     formData.append('sessionId', sessionId)
