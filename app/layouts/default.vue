@@ -9,6 +9,13 @@ const userAvatar = ref<string | null>(null)
 const recordsMenuOpen = ref(true)
 const sidebarCollapsed = ref(false)
 const sidebarStorageKey = 'doc-ai-sidebar-collapsed'
+const appFullName = '项目材料独创性智能审查系统'
+const appShortName = '材料智审'
+const sidebarExpandedWidth = 'clamp(13rem, 15vw, 15rem)'
+const sidebarCollapsedWidth = '5rem'
+const sidebarWidth = computed(() =>
+  sidebarCollapsed.value ? sidebarCollapsedWidth : sidebarExpandedWidth
+)
 
 type TopLink = { name: string; path: string; icon: string }
 
@@ -50,7 +57,7 @@ const recordGroupIcon =
 
 const recordSubLinks = [
   { name: '文档对比记录', path: '/records/doc-compare' },
-  { name: '文档审查记录', path: '/records/paper-review' }
+  { name: '文档质检记录', path: '/records/paper-review' }
 ]
 
 const flatNavForTitle = computed(() => {
@@ -60,7 +67,7 @@ const flatNavForTitle = computed(() => {
 })
 
 const currentPageTitle = computed(
-  () => flatNavForTitle.value.find(i => i.path === route.path)?.name ?? '项目材料独创性智能审查系统'
+  () => flatNavForTitle.value.find(i => i.path === route.path)?.name ?? appFullName
 )
 
 const isNavActive = (path: string) => route.path === path
@@ -143,8 +150,8 @@ const logout = async () => {
   <div class="flex h-screen bg-gray-50 overflow-hidden">
 
     <aside
-      class="bg-white border-r border-gray-200 flex flex-col shadow-sm z-20 transition-[width] duration-200"
-      :class="sidebarCollapsed ? 'w-20' : 'w-64'"
+      class="shrink-0 bg-white border-r border-gray-200 flex flex-col shadow-sm z-20 transition-[width] duration-200"
+      :style="{ width: sidebarWidth }"
     >
       <div
         class="h-16 flex items-center border-b border-gray-100 bg-indigo-600 px-3"
@@ -152,17 +159,19 @@ const logout = async () => {
       >
         <h1
           class="min-w-0 text-white font-semibold text-base tracking-wide flex items-center gap-2 whitespace-nowrap"
-          title="项目材料独创性智能审查系统"
+          :title="appFullName"
+          :aria-label="appFullName"
         >
           <svg class="w-4 h-4 text-white/90 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 13h4v8H3v-8zm7-6h4v14h-4V7zm7 3h4v11h-4V10zM3 3h18" />
           </svg>
-          <span v-show="!sidebarCollapsed" class="leading-none truncate">项目材料独创性智能审查系统</span>
+          <span v-show="!sidebarCollapsed" class="leading-none">{{ appShortName }}</span>
         </h1>
         <button
           type="button"
           class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-white/80 transition hover:bg-white/10 hover:text-white"
           :title="sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'"
+          :aria-label="sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'"
           @click="sidebarCollapsed = !sidebarCollapsed"
         >
           <svg class="h-5 w-5 transition-transform" :class="sidebarCollapsed ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -283,10 +292,15 @@ const logout = async () => {
 
     <main class="flex-1 flex flex-col h-full overflow-hidden relative">
       <header class="h-16 bg-white border-b border-gray-200 flex items-center px-8 justify-between shadow-sm z-10">
-        <h2 class="text-lg font-semibold text-gray-800">
-          {{ currentPageTitle }}
-        </h2>
-        <div class="flex gap-4 items-center">
+        <div class="min-w-0 flex-1 pr-4">
+          <h2 class="truncate text-lg font-semibold text-gray-800" :title="currentPageTitle">
+            {{ currentPageTitle }}
+          </h2>
+          <p class="mt-0.5 truncate text-xs font-medium text-gray-500" :title="appFullName">
+            {{ appFullName }}
+          </p>
+        </div>
+        <div class="flex shrink-0 gap-4 items-center">
           <button class="text-gray-400 hover:text-indigo-600 transition-colors">🔔</button>
           <button
             type="button"

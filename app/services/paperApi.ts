@@ -66,6 +66,8 @@ export interface PaperTaskVO {
   taskId: string
   fileName: string
   status: PaperTaskStatus
+  createBy?: string | null
+  reportPdfObject?: string | null
   stage?: string
   progress?: number
   agentStatus?: PaperAgentStatus
@@ -73,6 +75,12 @@ export interface PaperTaskVO {
   resultJson?: string | null
   report?: PaperQualityReport | null
   createTime: string
+}
+
+export interface PaperReportPdfUrl {
+  viewUrl: string
+  downloadUrl: string
+  objectKey: string
 }
 
 /**
@@ -103,4 +111,25 @@ export const getPaperTaskStatus = async (taskId: string): Promise<PaperTaskVO> =
  */
 export const getPaperTaskResult = async (taskId: string): Promise<PaperTaskVO> => {
   return await http<PaperTaskVO>(`/api/paper/result/${taskId}`, { method: 'GET' })
+}
+
+/**
+ * 获取当前登录用户的文档质检历史记录
+ */
+export const getPaperTaskHistory = async (limit: number = 50): Promise<PaperTaskVO[]> => {
+  return await http<PaperTaskVO[]>('/api/paper/history', {
+    method: 'GET',
+    params: {
+      limit: String(limit)
+    }
+  })
+}
+
+/**
+ * 获取文档质检报告 PDF 的预签名查看/下载地址
+ */
+export const getPaperReportPdfUrl = async (taskId: string): Promise<PaperReportPdfUrl> => {
+  return await http<PaperReportPdfUrl>(`/api/paper/report/${taskId}/pdf-url`, {
+    method: 'GET'
+  })
 }
