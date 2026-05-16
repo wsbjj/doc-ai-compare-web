@@ -61,6 +61,7 @@ const running = ref(false)
 const errorMsg = ref('')
 const showMarkdown = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
+const chatScrollRef = ref<HTMLElement | null>(null)
 const autoRouteEnabled = ref(false)
 const autoRouteStorageKey = 'agency-agents-auto-route-enabled'
 const lastAutoRouteAgentId = ref<string | null>(null)
@@ -70,6 +71,7 @@ const agentListCollapsed = ref(false)
 const agentListStorageKey = 'agency-agents-agent-list-collapsed'
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null
+let chatScrollFrame: number | null = null
 
 const totalAgentCount = computed(() =>
   departments.value.reduce((sum, department) => sum + (department.agentCount || 0), 0)
@@ -145,6 +147,26 @@ const currentInputPlaceholder = computed(() => {
   if (autoRouteEnabled.value) return '描述任务，系统会自动匹配 Agent'
   return selectedAgent.value ? `交给「${selectedAgent.value.name}」处理` : '请选择一个 Agent'
 })
+
+const scrollChatToLatest = async (behavior: ScrollBehavior = 'smooth') => {
+  await nextTick()
+  if (!process.client) return
+
+  if (chatScrollFrame !== null) {
+    window.cancelAnimationFrame(chatScrollFrame)
+  }
+
+  chatScrollFrame = window.requestAnimationFrame(() => {
+    const scrollEl = chatScrollRef.value
+    if (scrollEl) {
+      scrollEl.scrollTo({
+        top: scrollEl.scrollHeight,
+        behavior
+      })
+    }
+    chatScrollFrame = null
+  })
+}
 
 const toggleAutoRoute = () => {
   autoRouteEnabled.value = !autoRouteEnabled.value
@@ -280,8 +302,13 @@ const runCurrentAgent = async () => {
   }) - 1
   const updateAssistant = (update: (entry: ChatEntry) => void) => {
     const entry = chat.value[assistantIndex]
-    if (entry) update(entry)
+    if (entry) {
+      update(entry)
+      void scrollChatToLatest('auto')
+    }
   }
+
+  void scrollChatToLatest()
 
   const applyStreamEvent = (event: AgencyAgentChatStreamEvent) => {
     updateAssistant(entry => {
@@ -430,6 +457,9 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (searchTimer) clearTimeout(searchTimer)
+  if (process.client && chatScrollFrame !== null) {
+    window.cancelAnimationFrame(chatScrollFrame)
+  }
 })
 </script>
 
@@ -733,7 +763,7 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div class="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
+        <div ref="chatScrollRef" class="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
           <div v-if="errorMsg" class="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
             {{ errorMsg }}
           </div>
