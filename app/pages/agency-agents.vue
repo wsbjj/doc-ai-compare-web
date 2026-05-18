@@ -90,13 +90,24 @@ const agentListCollapsed = ref(false)
 const agentListStorageKey = 'agency-agents-agent-list-collapsed'
 const chatHistoryCollapsed = ref(false)
 const chatHistoryStorageKey = 'agency-agents-chat-history-collapsed'
+const workbenchShellRef = ref<HTMLElement | null>(null)
+const wideWorkbenchMinWidth = 1600
+const menuAutoCollapseMinWidth = 1360
+const agentListAutoCollapseMinWidth = 1040
+const workbenchWidth = ref(0)
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null
 let mentionSearchTimer: ReturnType<typeof setTimeout> | null = null
 let chatScrollFrame: number | null = null
 let chatTurnCounter = 0
 let chatHistoryPreferenceReady = false
+let workbenchMenuStoredPreference: boolean | null = null
+let agentListStoredPreference: boolean | null = null
+let chatHistoryHasStoredPreference = false
+let applyingResponsiveChatHistoryDefault = false
+let applyingResponsiveWorkbenchLayout = false
 let chatSessionsRequestSeq = 0
+let workbenchResizeObserver: ResizeObserver | null = null
 
 const totalAgentCount = computed(() =>
   departments.value.reduce((sum, department) => sum + (department.agentCount || 0), 0)
@@ -796,19 +807,22 @@ watch([selectedDepartmentId, keyword], () => {
 })
 
 watch(workbenchMenuCollapsed, value => {
-  if (process.client) {
+  if (process.client && !applyingResponsiveWorkbenchLayout) {
+    workbenchMenuStoredPreference = value
     localStorage.setItem(workbenchMenuStorageKey, value ? '1' : '0')
   }
 })
 
 watch(agentListCollapsed, value => {
-  if (process.client) {
+  if (process.client && !applyingResponsiveWorkbenchLayout) {
+    agentListStoredPreference = value
     localStorage.setItem(agentListStorageKey, value ? '1' : '0')
   }
 })
 
 watch(chatHistoryCollapsed, value => {
-  if (process.client && chatHistoryPreferenceReady) {
+  if (process.client && chatHistoryPreferenceReady && !applyingResponsiveChatHistoryDefault) {
+    chatHistoryHasStoredPreference = true
     localStorage.setItem(chatHistoryStorageKey, value ? '1' : '0')
   }
 })
@@ -819,15 +833,113 @@ watch(autoRouteEnabled, value => {
   }
 })
 
+const getCurrentWorkbenchWidth = () =>
+  workbenchShellRef.value?.clientWidth
+  || workbenchWidth.value
+  || (typeof window === 'undefined' ? wideWorkbenchMinWidth : window.innerWidth)
+
+const persistWorkbenchMenuPreference = (collapsed: boolean) => {
+  workbenchMenuStoredPreference = collapsed
+  localStorage.setItem(workbenchMenuStorageKey, collapsed ? '1' : '0')
+}
+
+const persistAgentListPreference = (collapsed: boolean) => {
+  agentListStoredPreference = collapsed
+  localStorage.setItem(agentListStorageKey, collapsed ? '1' : '0')
+}
+
+const setWorkbenchMenuCollapsed = (collapsed: boolean) => {
+  if (!process.client) {
+    workbenchMenuCollapsed.value = collapsed
+    return
+  }
+
+  persistWorkbenchMenuPreference(collapsed)
+  const width = getCurrentWorkbenchWidth()
+  if (!collapsed && width < menuAutoCollapseMinWidth) {
+    applyResponsiveWorkbenchLayout(width)
+    return
+  }
+  workbenchMenuCollapsed.value = collapsed
+}
+
+const toggleWorkbenchMenuCollapsed = () => {
+  setWorkbenchMenuCollapsed(!workbenchMenuCollapsed.value)
+}
+
+const setAgentListCollapsed = (collapsed: boolean) => {
+  if (!process.client) {
+    agentListCollapsed.value = collapsed
+    return
+  }
+
+  persistAgentListPreference(collapsed)
+  const width = getCurrentWorkbenchWidth()
+  if (!collapsed && width < agentListAutoCollapseMinWidth) {
+    applyResponsiveWorkbenchLayout(width)
+    return
+  }
+  agentListCollapsed.value = collapsed
+}
+
+const applyResponsiveChatHistoryDefault = (width?: number) => {
+  if (!process.client || chatHistoryHasStoredPreference) return
+  const workbenchWidth = width || workbenchShellRef.value?.clientWidth || window.innerWidth
+  applyingResponsiveChatHistoryDefault = true
+  chatHistoryCollapsed.value = workbenchWidth < wideWorkbenchMinWidth
+  void nextTick(() => {
+    applyingResponsiveChatHistoryDefault = false
+  })
+}
+
+const applyResponsiveWorkbenchLayout = (width?: number) => {
+  if (!process.client) return
+  const nextWorkbenchWidth = width || getCurrentWorkbenchWidth()
+  workbenchWidth.value = nextWorkbenchWidth
+  applyResponsiveChatHistoryDefault(nextWorkbenchWidth)
+
+  const nextMenuCollapsed = nextWorkbenchWidth < menuAutoCollapseMinWidth
+    ? true
+    : workbenchMenuStoredPreference ?? false
+  const nextAgentListCollapsed = nextWorkbenchWidth < agentListAutoCollapseMinWidth
+    ? true
+    : agentListStoredPreference ?? false
+
+  applyingResponsiveWorkbenchLayout = true
+  workbenchMenuCollapsed.value = nextMenuCollapsed
+  agentListCollapsed.value = nextAgentListCollapsed
+  void nextTick(() => {
+    applyingResponsiveWorkbenchLayout = false
+  })
+}
+
 onMounted(async () => {
   if (process.client) {
     autoRouteEnabled.value = localStorage.getItem(autoRouteStorageKey) === '1'
-    workbenchMenuCollapsed.value = localStorage.getItem(workbenchMenuStorageKey) === '1'
-    agentListCollapsed.value = localStorage.getItem(agentListStorageKey) === '1'
+    const storedWorkbenchMenuState = localStorage.getItem(workbenchMenuStorageKey)
+    const storedAgentListState = localStorage.getItem(agentListStorageKey)
     const storedHistoryState = localStorage.getItem(chatHistoryStorageKey)
-    chatHistoryCollapsed.value = storedHistoryState == null
-      ? window.innerWidth < 1280
-      : storedHistoryState === '1'
+    workbenchMenuStoredPreference = storedWorkbenchMenuState == null
+      ? null
+      : storedWorkbenchMenuState === '1'
+    agentListStoredPreference = storedAgentListState == null
+      ? null
+      : storedAgentListState === '1'
+    workbenchMenuCollapsed.value = workbenchMenuStoredPreference ?? false
+    agentListCollapsed.value = agentListStoredPreference ?? false
+    chatHistoryHasStoredPreference = storedHistoryState != null
+    await nextTick()
+    if (chatHistoryHasStoredPreference) {
+      chatHistoryCollapsed.value = storedHistoryState === '1'
+    }
+    applyResponsiveWorkbenchLayout()
+    if (typeof ResizeObserver !== 'undefined' && workbenchShellRef.value) {
+      workbenchResizeObserver = new ResizeObserver(entries => {
+        const width = entries[0]?.contentRect.width
+        applyResponsiveWorkbenchLayout(width)
+      })
+      workbenchResizeObserver.observe(workbenchShellRef.value)
+    }
     void nextTick(() => {
       chatHistoryPreferenceReady = true
     })
@@ -844,13 +956,15 @@ onUnmounted(() => {
   if (process.client && chatScrollFrame !== null) {
     window.cancelAnimationFrame(chatScrollFrame)
   }
+  workbenchResizeObserver?.disconnect()
+  workbenchResizeObserver = null
 })
 </script>
 
 <template>
-  <div class="h-[calc(100vh-4rem)] min-h-[680px] bg-[#f6f7f4] text-slate-900 overflow-hidden">
+  <div ref="workbenchShellRef" class="agency-workbench-shell h-[calc(100vh-4rem)] min-h-[680px] bg-[#f6f7f4] text-slate-900 overflow-hidden">
     <div
-      class="workbench-grid h-full grid grid-cols-1 border-t border-slate-200"
+      class="workbench-grid h-full grid border-t border-slate-200"
       :class="{
         'auto-route': autoRouteEnabled,
         'menu-collapsed': workbenchMenuCollapsed,
@@ -860,7 +974,7 @@ onUnmounted(() => {
     >
       <aside
         v-show="!autoRouteEnabled && !workbenchMenuCollapsed"
-        class="bg-[#fbfaf6] border-r border-slate-200 min-h-0 flex flex-col transition-[width] duration-200"
+        class="workbench-menu-panel bg-[#fbfaf6] border-r border-slate-200 min-h-0 flex flex-col transition-[width] duration-200"
       >
         <div class="border-b border-slate-200 p-2">
           <div class="flex items-center gap-2" :class="workbenchMenuCollapsed ? 'justify-center' : 'justify-between'">
@@ -879,7 +993,7 @@ onUnmounted(() => {
               type="button"
               class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
               :title="workbenchMenuCollapsed ? '展开部门菜单' : '折叠部门菜单'"
-              @click="workbenchMenuCollapsed = !workbenchMenuCollapsed"
+              @click="toggleWorkbenchMenuCollapsed"
             >
               <svg
                 class="h-5 w-5 transition-transform"
@@ -948,7 +1062,7 @@ onUnmounted(() => {
 
       <section
         v-show="!autoRouteEnabled && !agentListCollapsed"
-        class="bg-white border-r border-slate-200 min-h-0 flex flex-col"
+        class="agent-list-panel bg-white border-r border-slate-200 min-h-0 flex flex-col"
       >
         <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between gap-3">
           <div class="flex min-w-0 items-center gap-3">
@@ -957,7 +1071,7 @@ onUnmounted(() => {
               type="button"
               class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-950"
               title="展开部门菜单"
-              @click="workbenchMenuCollapsed = false"
+              @click="setWorkbenchMenuCollapsed(false)"
             >
               <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
@@ -976,7 +1090,7 @@ onUnmounted(() => {
               type="button"
               class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-950"
               title="折叠 Agent 列表"
-              @click="agentListCollapsed = true"
+              @click="setAgentListCollapsed(true)"
             >
               <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
@@ -1015,7 +1129,7 @@ onUnmounted(() => {
         </div>
       </section>
 
-      <main class="min-h-0 bg-[#f8f4ee] flex flex-col">
+      <main class="workbench-main-panel min-h-0 bg-[#f8f4ee] flex flex-col">
         <div class="border-b border-slate-200 bg-[#fbfaf6] px-6 py-5">
           <div v-if="autoRouteEnabled" class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div class="min-w-0 max-w-3xl">
@@ -1057,7 +1171,7 @@ onUnmounted(() => {
                   type="button"
                   class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-950"
                   title="展开 Agent 列表"
-                  @click="agentListCollapsed = false"
+                  @click="setAgentListCollapsed(false)"
                 >
                   <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
@@ -1068,7 +1182,7 @@ onUnmounted(() => {
                   type="button"
                   class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-950"
                   title="展开部门菜单"
-                  @click="workbenchMenuCollapsed = false"
+                  @click="setWorkbenchMenuCollapsed(false)"
                 >
                   <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h10M4 18h16" />
@@ -1119,7 +1233,7 @@ onUnmounted(() => {
               type="button"
               class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-950"
               title="展开 Agent 列表"
-              @click="agentListCollapsed = false"
+              @click="setAgentListCollapsed(false)"
             >
               <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
@@ -1130,7 +1244,7 @@ onUnmounted(() => {
               type="button"
               class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-950"
               title="展开部门菜单"
-              @click="workbenchMenuCollapsed = false"
+              @click="setWorkbenchMenuCollapsed(false)"
             >
               <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h10M4 18h16" />
@@ -1460,6 +1574,19 @@ onUnmounted(() => {
           </div>
         </div>
       </aside>
+
+      <button
+        v-if="chatHistoryCollapsed"
+        type="button"
+        class="chat-history-dock-handle inline-flex items-center justify-center rounded-l-lg border border-r-0 border-slate-200 bg-white text-slate-600 shadow-[0_8px_24px_rgba(15,23,42,0.14)] transition hover:bg-slate-50 hover:text-slate-950"
+        title="展开聊天记录"
+        @click="chatHistoryCollapsed = false"
+      >
+        <svg class="h-5 w-5 rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+        </svg>
+        <span class="sr-only">展开聊天记录</span>
+      </button>
     </div>
 
     <div
@@ -1505,14 +1632,62 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
+.agency-workbench-shell {
+  container: agency-workbench / inline-size;
+  position: relative;
+}
+
+.workbench-grid {
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.workbench-grid > * {
+  min-width: 0;
+}
+
+.workbench-menu-panel,
+.agent-list-panel,
+.workbench-main-panel {
+  overflow: hidden;
+}
+
 .chat-history-panel {
   display: flex;
   flex-direction: column;
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  width: min(22rem, calc(100% - 1rem));
+  max-width: calc(100% - 1rem);
+  will-change: transform;
 }
 
 .history-rail-label {
   writing-mode: vertical-rl;
   text-orientation: mixed;
+}
+
+.chat-history-panel-collapsed {
+  pointer-events: none;
+  transform: translateX(100%);
+}
+
+.chat-history-panel-open {
+  transform: translateX(0);
+}
+
+.chat-history-dock-handle {
+  position: absolute;
+  top: 5.25rem;
+  right: 0;
+  z-index: 45;
+  height: 3rem;
+  width: 3rem;
 }
 
 .chat-markdown {
@@ -1656,7 +1831,32 @@ onUnmounted(() => {
   border-top: 1px solid #e2e8f0;
 }
 
-@media (min-width: 1280px) {
+@container agency-workbench (min-width: 52rem) {
+  .workbench-grid {
+    grid-template-columns: minmax(11rem, 13rem) minmax(16rem, 20rem) minmax(0, 1fr);
+  }
+
+  .workbench-grid.menu-collapsed {
+    grid-template-columns: minmax(16rem, 20rem) minmax(0, 1fr);
+  }
+
+  .workbench-grid.agent-list-collapsed {
+    grid-template-columns: minmax(11rem, 13rem) minmax(0, 1fr);
+  }
+
+  .workbench-grid.menu-collapsed.agent-list-collapsed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workbench-grid.auto-route,
+  .workbench-grid.auto-route.menu-collapsed,
+  .workbench-grid.auto-route.agent-list-collapsed,
+  .workbench-grid.auto-route.menu-collapsed.agent-list-collapsed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@container agency-workbench (min-width: 100rem) {
   .workbench-grid {
     --history-width: 21rem;
     grid-template-columns: 15rem 24rem minmax(0, 1fr) var(--history-width);
@@ -1689,26 +1889,14 @@ onUnmounted(() => {
     position: relative;
     inset: auto;
     width: auto;
+    max-width: none;
+    z-index: auto;
+    pointer-events: auto;
     transform: none !important;
   }
-}
 
-@media (max-width: 1279px) {
-  .chat-history-panel {
-    position: fixed;
-    top: 4rem;
-    right: 0;
-    bottom: 0;
-    z-index: 40;
-    width: min(22rem, calc(100vw - 1rem));
-  }
-
-  .chat-history-panel-collapsed {
-    transform: translateX(calc(100% - 3.75rem));
-  }
-
-  .chat-history-panel-open {
-    transform: translateX(0);
+  .chat-history-dock-handle {
+    display: none;
   }
 }
 </style>
