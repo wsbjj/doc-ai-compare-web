@@ -59,6 +59,26 @@ export interface DashboardStats {
     avg_time: number
     avg_time_sec: string
     total_saved_hours: number
+    weekly_compare_count: number
+    weekly_high_risk_count: number
+    total_compare_count: number
+    report_generated_count: number
+    risk_distribution: {
+        HIGH: number
+        MEDIUM: number
+        LOW: number
+    }
+    seven_day_trend: Array<{
+        date: string
+        count: number
+        avg_sim_percent: number
+        high_risk_count: number
+    }>
+    paper_total_count: number
+    paper_processing_count: number
+    paper_completed_count: number
+    paper_failed_count: number
+    paper_avg_score: number
 }
 
 export interface RecentActivity {

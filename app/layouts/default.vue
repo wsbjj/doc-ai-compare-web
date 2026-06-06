@@ -5,6 +5,7 @@ const userId = ref<string | null>(null)
 const userName = ref<string | null>(null)
 const userStudentNo = ref<string | null>(null)
 const userAvatar = ref<string | null>(null)
+const isAdmin = ref(false)
 
 const recordsMenuOpen = ref(true)
 const sidebarCollapsed = ref(false)
@@ -17,7 +18,7 @@ const sidebarWidth = computed(() =>
   sidebarCollapsed.value ? sidebarCollapsedWidth : sidebarExpandedWidth
 )
 
-type TopLink = { name: string; path: string; icon: string }
+type TopLink = { name: string; path: string; icon: string; adminOnly?: boolean }
 
 const menuTopLinks: TopLink[] = [
   {
@@ -49,6 +50,12 @@ const menuTopLinks: TopLink[] = [
     name: 'Agent 工作台',
     path: '/agency-agents',
     icon: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a7 7 0 017 7v3a3 3 0 01-3 3H8a3 3 0 01-3-3v-3a7 7 0 017-7zm-3 7h.01M15 13h.01M9 17h6M4 13H2m20 0h-2" />'
+  },
+  {
+    name: '管理员',
+    path: '/admin',
+    adminOnly: true,
+    icon: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12.75 11.25 15 15 9.75M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6l7-3z" />'
   }
 ]
 
@@ -60,8 +67,12 @@ const recordSubLinks = [
   { name: '文档质检记录', path: '/records/paper-review' }
 ]
 
+const visibleMenuTopLinks = computed(() =>
+  menuTopLinks.filter(i => !i.adminOnly || isAdmin.value)
+)
+
 const flatNavForTitle = computed(() => {
-  const top = menuTopLinks.map(i => ({ name: i.name, path: i.path }))
+  const top = visibleMenuTopLinks.value.map(i => ({ name: i.name, path: i.path }))
   const sub = recordSubLinks.map(i => ({ name: i.name, path: i.path }))
   return [...top, ...sub]
 })
@@ -103,12 +114,15 @@ onMounted(async () => {
       code: number
       data?: {
         loggedIn?: boolean
+        isAdmin?: boolean
         user?: { id: string; name?: string; realName?: string; studentNo?: string }
       }
       message?: string
     }>('/api/auth/me', {
       credentials: 'include'
     })
+
+    isAdmin.value = !!res.data?.isAdmin
 
     if (res.data?.loggedIn && res.data.user?.id) {
       userId.value = res.data.user.id
@@ -182,7 +196,7 @@ const logout = async () => {
 
       <nav class="flex-1 py-6 px-3 space-y-2 overflow-y-auto">
         <NuxtLink
-          v-for="item in menuTopLinks"
+          v-for="item in visibleMenuTopLinks"
           :key="item.path"
           :to="item.path"
           class="relative flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 group"
